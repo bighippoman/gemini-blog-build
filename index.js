@@ -30,13 +30,30 @@ const defaultConfig = {
 let config = defaultConfig;
 const configPath = 'blog.config.json';
 const buildCachePath = '.build-cache.json';
+const dataFilePath = 'data.json';
 
 // Load config (or create default if not exists)
 if (fs.existsSync(configPath)) {
-    const userConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    config = { ...defaultConfig, ...userConfig };
+    try {
+        const userConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        config = { ...defaultConfig, ...userConfig };
+    } catch (e) {
+        console.error(`Error: Could not parse ${configPath}. Please check for valid JSON. Error: ${e.message}`);
+        process.exit(1);
+    }
 } else {
     fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2));
+}
+
+// Load global data
+let globalData = {};
+if (fs.existsSync(dataFilePath)) {
+    try {
+        globalData = JSON.parse(fs.readFileSync(dataFilePath, 'utf-8'));
+    } catch (e) {
+        console.error(`Error: Could not parse ${dataFilePath}. Please check for valid JSON. Error: ${e.message}`);
+        process.exit(1);
+    }
 }
 
 // Parse CLI arguments
@@ -50,6 +67,7 @@ let serveMode = false;
 let newPostMode = false;
 let configMode = false;
 let helpMode = false;
+let deployMode = false;
 
 for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -71,6 +89,8 @@ for (let i = 0; i < args.length; i++) {
         configMode = true;
     } else if (arg === '--help' || arg === '-h') {
         helpMode = true;
+    } else if (arg === 'deploy') {
+        deployMode = true;
     } else if (!arg.startsWith('--')) {
         postsDir = arg; // Assume the first non-flag argument is the posts directory
     }
@@ -98,9 +118,12 @@ function copyRecursiveSync(src, dest) {
     }
 }
 
-// Function to handle template includes
-function processIncludes(htmlContent) {
-    return htmlContent.replace(/{{include\s+(.*?)\s*}}/g, (match, filename) => {
+// Simple templating engine with conditional logic and loops
+function renderTemplate(templateString, data) {
+    let rendered = templateString;
+
+    // Process includes first
+    rendered = rendered.replace(/{{include\s+(.*?)\s*}}/g, (match, filename) => {
         const includePath = path.join(process.cwd(), filename);
         if (fs.existsSync(includePath)) {
             return fs.readFileSync(includePath, 'utf-8');
@@ -109,6 +132,38 @@ function processIncludes(htmlContent) {
             return '';
         }
     });
+
+    // Process each loops
+    rendered = rendered.replace(/{{#each\s+(.*?)\s*}}([\s\S]*?){{\/each}}/g, (match, arrayPath, innerTemplate) => {
+        const array = arrayPath.split('.').reduce((o, i) => o ? o[i] : undefined, data);
+        if (!Array.isArray(array)) {
+            console.warn(`Warning: {{#each}} expected an array, but got ${typeof array} for ${arrayPath}`);
+            return '';
+        }
+        return array.map(item => {
+            // Create a new data context for each item in the loop
+            const itemData = { ...data, ...item };
+            return renderTemplate(innerTemplate, itemData); // Recursively render inner template
+        }).join('');
+    });
+
+    // Process if conditions
+    rendered = rendered.replace(/{{#if\s+(.*?)\s*}}([\s\S]*?)(?:{{\/if}})?/g, (match, conditionPath, innerTemplate) => {
+        const conditionValue = conditionPath.split('.').reduce((o, i) => o ? o[i] : undefined, data);
+        if (!!conditionValue) {
+            return renderTemplate(innerTemplate, data); // Recursively render inner template
+        } else {
+            return '';
+        }
+    });
+
+    // Process simple variables
+    rendered = rendered.replace(/{{(.*?)}}/g, (match, key) => {
+        const value = key.split('.').reduce((o, i) => o ? o[i] : undefined, data);
+        return value !== undefined ? value : '';
+    });
+
+    return rendered;
 }
 
 // Function to process shortcodes
@@ -459,6 +514,16 @@ function parseFrontmatter(content) {
     }
 }
 
+function minifyHtml(html) {
+    return html.replace(/\s+/g, ' ').replace(/>\s*</g, '><');
+}
+
+function minifyCss(css) {
+    return css.replace(/\/\*.*?\*\//g, '') // Remove comments
+               .replace(/\s*([{}|:;,])\s*/g, '$1') // Remove whitespace around punctuation
+               .replace(/;}/g, '}'); // Remove last semicolon in rules
+}
+
 function buildBlog() {
     if (cleanBuild && fs.existsSync(distDir)) {
         fs.rmSync(distDir, { recursive: true, force: true });
@@ -508,18 +573,18 @@ function buildBlog() {
     const themeHomepageTemplatePath = path.join(themeDir, 'homepage-template.html');
     const themeStylePath = path.join(themeDir, 'style.css');
 
-    let postTemplate = null;
+    let postTemplateContent = null;
     if (fs.existsSync(config.template)) { // Check root override first
-        postTemplate = fs.readFileSync(config.template, 'utf-8');
+        postTemplateContent = fs.readFileSync(config.template, 'utf-8');
     } else if (fs.existsSync(themeTemplatePath)) {
-        postTemplate = fs.readFileSync(themeTemplatePath, 'utf-8');
+        postTemplateContent = fs.readFileSync(themeTemplatePath, 'utf-8');
     }
 
-    let homepageTemplate = null;
+    let homepageTemplateContent = null;
     if (fs.existsSync(config.homepageTemplate)) { // Check root override first
-        homepageTemplate = fs.readFileSync(config.homepageTemplate, 'utf-8');
+        homepageTemplateContent = fs.readFileSync(config.homepageTemplate, 'utf-8');
     } else if (fs.existsSync(themeHomepageTemplatePath)) {
-        homepageTemplate = fs.readFileSync(themeHomepageTemplatePath, 'utf-8');
+        homepageTemplateContent = fs.readFileSync(themeHomepageTemplatePath, 'utf-8');
     }
 
     let cssContent = '';
@@ -531,7 +596,7 @@ function buildBlog() {
         // Default CSS if no theme or override is found
         cssContent = `\n            body { font-family: ${config.designTokens.fontFamily}; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }\n            h1 { font-size: ${config.designTokens.h1Size}; color: ${config.designTokens.primaryColor}; }\n            h2 { font-size: ${config.designTokens.h2Size}; }\n            h3 { font-size: ${config.designTokens.h3Size}; }\n            h4 { font-size: ${config.designTokens.h4Size}; }\n            h5 { font-size: ${config.designTokens.h5Size}; }\n            h6 { font-size: ${config.designTokens.h6Size}; }\n            a { color: ${config.designTokens.primaryColor}; text-decoration: none; }\n            a:hover { text-decoration: underline; }\n            ul { list-style: none; padding: 0; }\n            li { margin-bottom: 1rem; }\n            .nav { display: flex; justify-content: space-between; margin-top: 2rem; }\n            /* Admonition styles */\n            .admonition { padding: 1em; margin: 1em 0; border-left: 4px solid; border-radius: 4px; }\n            .admonition-title { font-weight: bold; margin-top: 0; }\n            .admonition.note { border-color: #2196F3; background-color: #e3f2fd; }\n            .admonition.note .admonition-title { color: #2196F3; }\n            .admonition.tip { border-color: #4CAF50; background-color: #e8f5e9; }\n            .admonition.tip .admonition-title { color: #4CAF50; }\n            .admonition.warning { border-color: #FFC107; background-color: #fff8e1; }\n            .admonition.warning .admonition-title { color: #FFC107; }\n            .admonition.danger { border-color: #F44336; background-color: #ffebee; }\n            .admonition.danger .admonition-title { color: #F44336; }\n            /* Footnotes */\n            .footnotes { margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; font-size: 0.9em; }\n            .footnotes ol { padding-left: 1.5em; }\n            .footnotes li { margin-bottom: 0.5em; }\n            .footnotes li a { text-decoration: none; }\n            .footnotes li a:hover { text-decoration: underline; }\n            /* Tables */\n            table { border-collapse: collapse; width: 100%; margin: 1em 0; }\n            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n            th { background-color: #f2f2f2; }\n            /* Images with captions */\n            figure { margin: 1em 0; text-align: center; }\n            figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n            figcaption { font-size: 0.9em; color: #555; margin-top: 0.5em; }\n            /* Shortcodes */\n            .shortcode-quote { border-left: 4px solid #ccc; padding-left: 1em; margin: 1em 0; font-style: italic; }\n            .shortcode-quote cite { display: block; text-align: right; font-style: normal; color: #777; }\n            /* Syntax Highlighting */\n            pre { background-color: #eee; padding: 1em; overflow-x: auto; }\n            .keyword { color: #00f; }\n            .string { color: #a31515; }\n            .comment { color: #008000; }\n            .number { color: #f90; }\n        `;
     }
-    fs.writeFileSync(path.join(distDir, 'style.css'), cssContent);
+    fs.writeFileSync(path.join(distDir, 'style.css'), minifyCss(cssContent));
 
     // Copy assets before processing posts
     if (fs.existsSync(assetsDir)) {
@@ -597,14 +662,19 @@ function buildBlog() {
             let prevLink = prevPost ? `<a href="${prevPost.htmlFileName}">&laquo; ${prevPost.title}</a>` : '<span></span>';
             let nextLink = nextPost ? `<a href="${nextPost.htmlFileName}">${nextPost.title} &raquo;</a>` : '<span></span>';
 
+            // Prepare data for template rendering
+            const templateData = {
+                title: post.title,
+                content: htmlContent,
+                prev: prevLink,
+                next: nextLink,
+                site: globalData, // Pass global data
+                post: { ...post, excerpt: post.metadata.excerpt || post.content.split(' ').slice(0, 50).join(' ') + '...' } // Pass post data
+            };
+
             let finalHtml;
-            if (postTemplate) {
-                finalHtml = postTemplate
-                    .replace(/{{title}}/g, post.title)
-                    .replace(/{{content}}/g, htmlContent)
-                    .replace(/{{prev}}/g, prevLink)
-                    .replace(/{{next}}/g, nextLink);
-                finalHtml = processIncludes(finalHtml); // Process includes in post template
+            if (postTemplateContent) {
+                finalHtml = renderTemplate(postTemplateContent, templateData);
             } else {
                 finalHtml = `\n                    <!DOCTYPE html>\n                    <html lang="en">\n                    <head>\n                        <meta charset="UTF-8">\n                        <meta name="viewport" content="width=device-width, initial-scale=1.0">\n                        <title>${post.title}</title>\n                        <link rel="stylesheet" href="./style.css">\n                    </head>\n                    <body>\n                        <h1>${post.title}</h1>\n                        ${htmlContent}\n                        <div class="nav">\n                            ${prevLink}\n                            ${nextLink}\n                        </div>\n                    </body>\n                    </html>\n                `;
             }
@@ -613,7 +683,7 @@ function buildBlog() {
             if (!fs.existsSync(postOutputDir)) {
                 fs.mkdirSync(postOutputDir, { recursive: true });
             }
-            fs.writeFileSync(path.join(distDir, post.htmlFileName), finalHtml);
+            fs.writeFileSync(path.join(distDir, post.htmlFileName), minifyHtml(finalHtml));
         }
 
         // Update cache for processed file (even if not re-written, its metadata might be needed for global files)
@@ -643,24 +713,27 @@ function buildBlog() {
             paginationNav += '</div>';
         }
 
+        const homepageTemplateData = {
+            blogTitle: config.title,
+            postsList: postsListHtml,
+            pagination: paginationNav,
+            site: globalData // Pass global data
+        };
+
         let indexHtml;
-        if (homepageTemplate) {
-            indexHtml = homepageTemplate
-                .replace(/{{blogTitle}}/g, config.title)
-                .replace(/{{postsList}}/g, postsListHtml)
-                .replace(/{{pagination}}/g, paginationNav);
-            indexHtml = processIncludes(indexHtml); // Process includes in homepage template
+        if (homepageTemplateContent) {
+            indexHtml = renderTemplate(homepageTemplateContent, homepageTemplateData);
         } else {
             indexHtml = `\n                <!DOCTYPE html>\n                <html lang="en">\n                <head>\n                    <meta charset="UTF-8">\n                    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n                    <title>${config.title}</title>\n                    <link rel="stylesheet" href="./style.css">\n                </head>\n                <body>\n                    <h1>Blog Posts</h1>\n                    <ul>\n                        ${postsListHtml}\n                    </ul>\n                    ${paginationNav}\n                </body>\n                </html>\n            `;
         }
 
         const fileName = page === 1 ? 'index.html' : `index-${page}.html`;
-        fs.writeFileSync(path.join(distDir, fileName), indexHtml);
+        fs.writeFileSync(path.join(distDir, fileName), minifyHtml(indexHtml));
     }
 
     // RSS Feed Generation
     const rssItems = postData.map(post => {
-        const description = post.content.split(' ').slice(0, 100).join(' ') + '...'; // First 100 words
+        const description = post.metadata.excerpt || post.content.split(' ').slice(0, 100).join(' ') + '...'; // Use excerpt if available
         const pubDate = new Date(post.metadata.date).toUTCString();
         return `\n            <item>\n                <title>${post.title}</title>\n                <link>./${post.htmlFileName}</link>\n                <pubDate>${pubDate}</pubDate>\n                <description>${description}</description>\n            </item>\n        `;
     }).join('');
@@ -713,7 +786,7 @@ function buildBlog() {
 
                 const tagFileName = page === 1 ? `${tag}.html` : `${tag}-${page}.html`;
                 const tagHtml = `\n                    <!DOCTYPE html>\n                    <html lang="en">\n                    <head>\n                        <meta charset="UTF-8">\n                        <meta name="viewport" content="width=device-width, initial-scale=1.0">\n                        <title>Posts tagged: ${tag}</title>\n                        <link rel="stylesheet" href="../style.css">\n                    </head>\n                    <body>\n                        <h1>Posts Tagged: ${tag}</h1>\n                        <ul>\n                            ${tagPostsListHtml}\n                        </ul>\n                        ${tagPaginationNav}\n                        <p><a href="../index.html">Back to Home</a></p>\n                    </body>\n                    </html>\n                `;
-                fs.writeFileSync(path.join(tagsDir, tagFileName), tagHtml);
+                fs.writeFileSync(path.join(tagsDir, tagFileName), minifyHtml(tagHtml));
             }
         }
     }
@@ -722,11 +795,19 @@ function buildBlog() {
     const searchIndex = postData.map(post => ({
         title: post.title,
         url: `./${post.htmlFileName}`,
-        excerpt: post.content.split(' ').slice(0, 50).join(' ') + '...',
+        excerpt: post.metadata.excerpt || post.content.split(' ').slice(0, 50).join('...') + '...',
         tags: post.metadata.tags || [],
         date: post.metadata.date
     }));
     fs.writeFileSync(path.join(distDir, 'search-index.json'), JSON.stringify(searchIndex, null, 2));
+
+    // Sitemap Generation
+    let sitemapContent = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n`;
+    postData.forEach(post => {
+        sitemapContent += `  <url><loc>./${post.htmlFileName}</loc></url>\n`;
+    });
+    sitemapContent += `</urlset>`;
+    fs.writeFileSync(path.join(distDir, 'sitemap.xml'), sitemapContent);
 
     // Save build cache
     fs.writeFileSync(cacheFilePath, JSON.stringify(buildCache, null, 2));
@@ -870,13 +951,27 @@ async function newPostWizard() {
 
 // Function to display help information
 function showHelp() {
-    console.log(`\nUsage: blog-build [command] [options]\n\nCommands:\n  init              Run the interactive setup wizard.\n  new               Create a new blog post interactively.\n  config            Display current configuration.\n\nOptions:\n  --output <dir>    Specify the output directory (overrides blog.config.json).\n  --watch           Enable watch mode (rebuilds on file changes).\n  --serve           Start a local development server with live reload.\n  --clean           Clean the output directory before building.\n  ----github-pages  Prepare output for GitHub Pages deployment.\n  --help, -h        Display this help message.\n\nExamples:\n  blog-build init\n  blog-build new\n  blog-build\n  blog-build --watch\n  blog-build --serve\n  blog-build --clean\n  blog-build --output public\n  blog-build --github-pages\n    `);
+    console.log(`\nUsage: blog-build [command] [options]\n\nCommands:\n  init              Run the interactive setup wizard.\n  new               Create a new blog post interactively.\n  config            Display current configuration.\n  deploy            Deploy to GitHub Pages.\n\nOptions:\n  --output <dir>    Specify the output directory (overrides blog.config.json).\n  --watch           Enable watch mode (rebuilds on file changes).\n  --serve           Start a local development server with live reload.\n  --clean           Clean the output directory before building.\n  ----github-pages  Prepare output for GitHub Pages deployment.\n  --help, -h        Display this help message.\n\nExamples:\n  blog-build init\n  blog-build new\n  blog-build\n  blog-build --watch\n  blog-build --serve\n  blog-build --clean\n  blog-build --output public\n  blog-build --github-pages\n  blog-build deploy\n    `);
 }
 
 // Function to display current config
 function showConfig() {
     console.log("\nCurrent Configuration:");
     console.log(JSON.stringify(config, null, 2));
+}
+
+// Function to deploy to GitHub Pages
+function deployToGitHubPages() {
+    console.log(`\nAttempting to deploy to GitHub Pages...\nThis will run 'git subtree push --prefix ${distDir} origin gh-pages'.\nPlease ensure you have created a 'gh-pages' branch on your remote repository.\n`);
+    exec(`git subtree push --prefix ${distDir} origin gh-pages`, (err, stdout, stderr) => {
+        if (err) {
+            console.error(`Deployment failed: ${err.message}`);
+            console.error(stderr);
+            return;
+        }
+        console.log(stdout);
+        console.log("Deployment successful!");
+    });
 }
 
 if (initMode) {
@@ -887,6 +982,8 @@ if (initMode) {
     showHelp();
 } else if (configMode) {
     showConfig();
+} else if (deployMode) {
+    deployToGitHubPages();
 } else if (serveMode) {
     const server = http.createServer((req, res) => {
         if (req.url === '/__last_build_time__') {

@@ -1,4 +1,4 @@
-# gemini-blog-build v4.2
+# gemini-blog-build v4.3
 
 A powerful, zero-dependency CLI tool that transforms Markdown files into a complete, static HTML blog. Built entirely with Google's Gemini CLI, `gemini-blog-build` offers simplicity without sacrificing extensibility.
 
@@ -82,6 +82,9 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
 -   **Sitemap Generation**: Automatically generates a `sitemap.xml` file.
 -   **`blog-build help` Command**: Provides a clear overview of all commands and flags.
 -   **`blog-build config` Command**: Displays current configuration settings.
+-   **`blog-build deploy` Command**: Automates GitHub Pages deployment.
+-   **HTML Minification**: Removes unnecessary whitespace and comments from generated HTML files.
+-   **CSS Minification**: Removes unnecessary whitespace and comments from generated CSS files.
 
 ## Installation
 

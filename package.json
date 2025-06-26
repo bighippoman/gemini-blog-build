@@ -1,0 +1,20 @@
+{
+  "name": "blog-build",
+  "version": "1.0.0",
+  "description": "A zero-dependency CLI tool to build a blog from Markdown files.",
+  "main": "index.js",
+  "bin": {
+    "blog-build": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "cli",
+    "blog",
+    "markdown",
+    "static-site-generator"
+  ],
+  "author": "",
+  "license": "ISC"
+}

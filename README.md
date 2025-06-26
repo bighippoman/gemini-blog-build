@@ -1,4 +1,4 @@
-# gemini-blog-build v4.0
+# gemini-blog-build v4.1
 
 A powerful, zero-dependency CLI tool that transforms Markdown files into a complete, static HTML blog. Built entirely with Google's Gemini CLI, `gemini-blog-build` offers simplicity without sacrificing extensibility.
 
@@ -42,6 +42,12 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
     -   Footnotes (`[^1]`, `[^1]: Definition`)
     -   Definition Lists (`Term : Definition`)
     -   Admonitions/Callouts (`> [!NOTE] Title`)
+    -   Strikethrough (`~~text~~`)
+    -   Inline Code (`` `code` ``)
+    -   Horizontal Rules (`---`, `***`, `___`)
+    -   Improved Nested Lists
+    -   Better Paragraph Handling
+-   **Basic Syntax Highlighting (Zero-Dependency)**: Basic regex-based syntax highlighting for code blocks.
 -   **Shortcodes / Custom Components**: Embed reusable content like YouTube videos or custom quotes.
     ```markdown
     {{ youtube videoId="dQw4w9WgXcQ" }}
@@ -58,13 +64,16 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
     -   `--clean`: Clean the output directory before building.
     -   `--serve`: Start a local development server to preview the blog.
 -   **Interactive CLI Setup Wizard**: Run `blog-build init` for a guided setup of your blog, including title, output directory, and template choice.
--   **Post Creation Wizard (`blog-build new`)**: Interactively create new Markdown files with pre-filled frontmatter.
+-   **Post Creation Wizard (`blog-build new`)**: Interactively create new Markdown files with pre-filled frontmatter, suggesting existing tags, and offering to open the file in an editor.
 -   **Tag/Category Pages**: Automatically generates dedicated HTML pages for each unique tag found in post frontmatter.
 -   **Search Index Generation**: Creates a `search-index.json` file in the output directory for client-side search implementations.
 -   **Incremental Builds**: Only re-processes changed Markdown files, significantly speeding up subsequent builds.
 -   **Draft Posts**: Exclude posts from the final build by adding `draft: true` to their frontmatter.
 -   **Related Posts**: Displays a list of related posts based on shared tags at the bottom of each post.
 -   **Dynamic Tag Cloud/List**: Generates a list of all tags used in the blog, with links to their respective tag pages.
+-   **Pagination for Content Listings**: Paginate homepage and tag/category pages with configurable posts per page.
+-   **Customizable Permalinks**: Define custom URL structures for posts (e.g., `/:year/:month/:slug.html`).
+-   **Favicon Support**: Automatically copies favicon files and adds necessary `<link>` tags.
 
 ## Installation
 

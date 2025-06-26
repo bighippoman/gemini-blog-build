@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const http = require('http');
+const { exec } = require('child_process');
 
 const defaultConfig = {
     title: "My AI-Built Blog",
@@ -11,6 +12,8 @@ const defaultConfig = {
     template: "template.html",
     homepageTemplate: "homepage-template.html",
     includeTags: true, // Default to true for tag pages
+    postsPerPage: 5, // Default for pagination
+    permalink: "/:slug.html", // Default permalink structure
     designTokens: { // Default design tokens
         primaryColor: "#007bff",
         fontFamily: "sans-serif",
@@ -106,6 +109,30 @@ function processShortcodes(content) {
     return content;
 }
 
+// Basic Syntax Highlighting (Zero-Dependency)
+function highlightCode(code, lang) {
+    // Very basic highlighting for common languages
+    let highlightedCode = code;
+
+    // Keywords (example for JavaScript)
+    const keywords = ['function', 'const', 'let', 'var', 'if', 'else', 'for', 'while', 'return', 'new', 'this', 'true', 'false', 'null', 'undefined'];
+    keywords.forEach(kw => {
+        highlightedCode = highlightedCode.replace(new RegExp(`\\b${kw}\\b`, 'g'), `<span class="keyword">${kw}</span>`);
+    });
+
+    // Strings
+    highlightedCode = highlightedCode.replace(/("|')(.*?)\1/g, `<span class="string">$1$2$1</span>`);
+
+    // Comments
+    highlightedCode = highlightedCode.replace(/\/\/(.*)/g, `<span class="comment">//$1</span>`);
+    highlightedCode = highlightedCode.replace(/\/\*[\s\S]*?\*\//g, `<span class="comment">$&</span>`);
+
+    // Numbers
+    highlightedCode = highlightedCode.replace(/\b\d+(\.\d+)?\b/g, `<span class="number">$&</span>`);
+
+    return highlightedCode;
+}
+
 // Enhanced Markdown to HTML conversion
 function mdToHtml(md) {
     let html = [];
@@ -122,6 +149,7 @@ function mdToHtml(md) {
     let inDefinitionList = false;
     let inAdmonition = false;
     let footnotes = {};
+    let currentParagraph = [];
 
     // First pass for footnotes definitions
     for (let i = 0; i < lines.length; i++) {
@@ -133,14 +161,45 @@ function mdToHtml(md) {
         }
     }
 
+    const processParagraph = () => {
+        if (currentParagraph.length > 0) {
+            let pContent = currentParagraph.join(' ');
+            // Apply inline formatting before wrapping in <p>
+            pContent = pContent.replace(/~~(.*?)~~/g, '<del>$1</del>'); // Strikethrough
+            pContent = pContent.replace(/`(.*?)`/g, '<code>$1</code>'); // Inline code
+            pContent = pContent.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'); // Bold
+            pContent = pContent.replace(/\*(.*?)\*/g, '<em>$1</em>');     // Italic
+            pContent = pContent.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1">$1</a>'); // Auto-link URLs
+            pContent = pContent.replace(/!\[(.*?)\]\((.*?)(?:\s+"(.*?)")?\)/g, (match, alt, src, caption) => {
+                let imgTag = `<img alt="${alt}" src="${src}">`;
+                if (caption) {
+                    return `<figure>${imgTag}<figcaption>${caption}</figcaption></figure>`;
+                } else {
+                    return imgTag;
+                }
+            });
+            // Footnote references
+            pContent = pContent.replace(/\[\^(\d+)\]/g, (match, fnId) => {
+                if (footnotes[fnId]) {
+                    return `<sup><a href="#fn${fnId}" id="fnref${fnId}">${fnId}</a></sup>`;
+                } else {
+                    return match; // Keep original if footnote not defined
+                }
+            });
+            html.push(`<p>${pContent}</p>`);
+            currentParagraph = [];
+        }
+    };
+
     for (let i = 0; i < lines.length; i++) {
         let line = lines[i];
         let trimmedLine = line.trim();
 
         // Code block detection
         if (line.startsWith('```')) {
+            processParagraph();
             if (inCodeBlock) {
-                html.push(`<pre><code class="language-${codeLang}">${codeContent.join('\n')}</code></pre>`);
+                html.push(`<pre><code class="language-${codeLang}">${highlightCode(codeContent.join('\n'), codeLang)}</code></pre>`);
                 inCodeBlock = false;
                 codeLang = '';
                 codeContent = [];
@@ -156,9 +215,17 @@ function mdToHtml(md) {
             continue;
         }
 
+        // Horizontal Rule
+        if (trimmedLine === '---' || trimmedLine === '***' || trimmedLine === '___') {
+            processParagraph();
+            html.push('<hr>');
+            continue;
+        }
+
         // Admonition detection
         const admonitionMatch = trimmedLine.match(/^>\s*\[!(NOTE|TIP|WARNING|DANGER)\]\s*(.*)/);
         if (admonitionMatch) {
+            processParagraph();
             if (inAdmonition) {
                 html.push('</div>'); // Close previous admonition
             }
@@ -179,6 +246,7 @@ function mdToHtml(md) {
 
         // Table detection
         if (line.includes('|') && line.trim().startsWith('|') && !inTable) {
+            processParagraph();
             // Check for header separator line
             if (lines[i + 1] && lines[i + 1].includes('|') && lines[i + 1].trim().startsWith('|') && lines[i + 1].includes('---')) {
                 inTable = true;
@@ -213,24 +281,35 @@ function mdToHtml(md) {
 
         // Blockquote detection
         if (trimmedLine.startsWith('>')) {
+            processParagraph();
             if (!inBlockquote) {
                 html.push('<blockquote>');
                 inBlockquote = true;
             }
             html.push(`<p>${trimmedLine.substring(1).trim()}</p>`);
             continue;
-        } else if (inBlockquote) {
+        } else if (inBlockquote && !trimmedLine.startsWith('>')) {
             html.push('</blockquote>');
             inBlockquote = false;
         }
 
         // List detection (unordered)
         if (trimmedLine.startsWith('-') || trimmedLine.startsWith('*')) {
-            if (!inUnorderedList) {
-                html.push('<ul>');
+            processParagraph();
+            const indent = line.match(/^\s*/)[0].length;
+            const tag = 'ul';
+            const item = `<li>${trimmedLine.substring(1).trim()}</li>`;
+            // Basic nested list handling (can be improved)
+            if (inUnorderedList && indent > lines[i-1].match(/^\s*/)[0].length) {
+                html.push(`<ul>${item}`);
+            } else if (inUnorderedList && indent < lines[i-1].match(/^\s*/)[0].length) {
+                html.push(`</ul>${item}`);
+            } else if (!inUnorderedList) {
+                html.push(`<ul>${item}`);
                 inUnorderedList = true;
+            } else {
+                html.push(item);
             }
-            html.push(`<li>${trimmedLine.substring(1).trim()}</li>`);
             continue;
         } else if (inUnorderedList) {
             html.push('</ul>');
@@ -239,11 +318,20 @@ function mdToHtml(md) {
 
         // List detection (ordered)
         if (trimmedLine.match(/^\d+\./)) {
-            if (!inOrderedList) {
-                html.push('<ol>');
+            processParagraph();
+            const indent = line.match(/^\s*/)[0].length;
+            const item = `<li>${trimmedLine.substring(trimmedLine.indexOf('.') + 1).trim()}</li>`;
+            // Basic nested list handling (can be improved)
+            if (inOrderedList && indent > lines[i-1].match(/^\s*/)[0].length) {
+                html.push(`<ol>${item}`);
+            } else if (inOrderedList && indent < lines[i-1].match(/^\s*/)[0].length) {
+                html.push(`</ol>${item}`);
+            } else if (!inOrderedList) {
+                html.push(`<ol>${item}`);
                 inOrderedList = true;
+            } else {
+                html.push(item);
             }
-            html.push(`<li>${trimmedLine.substring(trimmedLine.indexOf('.') + 1).trim()}</li>`);
             continue;
         } else if (inOrderedList) {
             html.push('</ol>');
@@ -253,6 +341,7 @@ function mdToHtml(md) {
         // Definition List detection
         const defListMatch = trimmedLine.match(/^(.*?)\s*:\s*(.*)$/);
         if (defListMatch) {
+            processParagraph();
             if (!inDefinitionList) {
                 html.push('<dl>');
                 inDefinitionList = true;
@@ -266,49 +355,31 @@ function mdToHtml(md) {
 
         // Headers
         if (line.startsWith('######')) {
+            processParagraph();
             html.push(`<h6>${line.substring(6).trim()}</h6>`);
         } else if (line.startsWith('#####')) {
+            processParagraph();
             html.push(`<h5>${line.substring(5).trim()}</h5>`);
         } else if (line.startsWith('####')) {
+            processParagraph();
             html.push(`<h4>${line.substring(4).trim()}</h4>`);
         } else if (line.startsWith('###')) {
+            processParagraph();
             html.push(`<h3>${line.substring(3).trim()}</h3>`);
         } else if (line.startsWith('##')) {
+            processParagraph();
             html.push(`<h2>${line.substring(2).trim()}</h2>`);
         } else if (line.startsWith('#')) {
+            processParagraph();
             html.push(`<h1>${line.substring(1).trim()}</h1>`);
         } else if (line.trim() === '') {
-            html.push('<br>');
+            processParagraph(); // End current paragraph on empty line
         } else {
-            // Footnote references
-            line = line.replace(/\[\^(\d+)\]/g, (match, fnId) => {
-                if (footnotes[fnId]) {
-                    return `<sup><a href="#fn${fnId}" id="fnref${fnId}">${fnId}</a></sup>`;
-                } else {
-                    return match; // Keep original if footnote not defined
-                }
-            });
-
-            // Images with optional captions
-            line = line.replace(/!\[(.*?)\]\((.*?)(?:\s+"(.*?)")?\)/g, (match, alt, src, caption) => {
-                let imgTag = `<img alt="${alt}" src="${src}">`;
-                if (caption) {
-                    return `<figure>${imgTag}<figcaption>${caption}</figcaption></figure>`;
-                } else {
-                    return imgTag;
-                }
-            });
-
-            // Bold and Italic
-            line = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'); // Bold
-            line = line.replace(/\*(.*?)\*/g, '<em>$1</em>');     // Italic
-
-            // Auto-link URLs
-            line = line.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1">$1</a>');
-
-            html.push(`<p>${line}</p>`);
+            currentParagraph.push(line);
         }
     }
+
+    processParagraph(); // Process any remaining paragraph content
 
     // Close any open tags at the end of the file
     if (inTable) {
@@ -385,55 +456,56 @@ function buildBlog() {
         fs.mkdirSync(distDir);
     }
 
+    // Load build cache
+    let buildCache = {};
+    const cacheFilePath = path.join(distDir, buildCachePath);
+    if (fs.existsSync(cacheFilePath)) {
+        buildCache = JSON.parse(fs.readFileSync(cacheFilePath, 'utf-8'));
+    }
+
+    let filesToProcess = [];
+    const currentMarkdownFiles = fs.readdirSync(postsDir).filter(file => file.endsWith('.md'));
+
+    currentMarkdownFiles.forEach(file => {
+        const filePath = path.join(postsDir, file);
+        const stats = fs.statSync(filePath);
+        const mtimeMs = stats.mtimeMs;
+
+        if (!buildCache[file] || buildCache[file] < mtimeMs) {
+            filesToProcess.push(file);
+        }
+    });
+
+    // Remove deleted files from cache and dist
+    for (const cachedFile in buildCache) {
+        if (!currentMarkdownFiles.includes(cachedFile)) {
+            const htmlFileName = cachedFile.replace('.md', '.html');
+            const htmlFilePath = path.join(distDir, htmlFileName);
+            if (fs.existsSync(htmlFilePath)) {
+                fs.unlinkSync(htmlFilePath);
+                console.log(`Deleted ${htmlFileName}`);
+            }
+            delete buildCache[cachedFile];
+        }
+    }
+
     // Generate CSS file based on design tokens
-    let cssContent = `
-        body { font-family: ${config.designTokens.fontFamily}; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-        h1 { font-size: ${config.designTokens.h1Size}; color: ${config.designTokens.primaryColor}; }
-        h2 { font-size: ${config.designTokens.h2Size}; }
-        h3 { font-size: ${config.designTokens.h3Size}; }
-        h4 { font-size: ${config.designTokens.h4Size}; }
-        h5 { font-size: ${config.designTokens.h5Size}; }
-        h6 { font-size: ${config.designTokens.h6Size}; }
-        a { color: ${config.designTokens.primaryColor}; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        ul { list-style: none; padding: 0; }
-        li { margin-bottom: 1rem; }
-        .nav { display: flex; justify-content: space-between; margin-top: 2rem; }
-        /* Admonition styles */
-        .admonition { padding: 1em; margin: 1em 0; border-left: 4px solid; border-radius: 4px; }
-        .admonition-title { font-weight: bold; margin-top: 0; }
-        .admonition.note { border-color: #2196F3; background-color: #e3f2fd; }
-        .admonition.note .admonition-title { color: #2196F3; }
-        .admonition.tip { border-color: #4CAF50; background-color: #e8f5e9; }
-        .admonition.tip .admonition-title { color: #4CAF50; }
-        .admonition.warning { border-color: #FFC107; background-color: #fff8e1; }
-        .admonition.warning .admonition-title { color: #FFC107; }
-        .admonition.danger { border-color: #F44336; background-color: #ffebee; }
-        .admonition.danger .admonition-title { color: #F44336; }
-        /* Footnotes */
-        .footnotes { margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; font-size: 0.9em; }
-        .footnotes ol { padding-left: 1.5em; }
-        .footnotes li { margin-bottom: 0.5em; }
-        .footnotes li a { text-decoration: none; }
-        .footnotes li a:hover { text-decoration: underline; }
-        /* Tables */
-        table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        /* Images with captions */
-        figure { margin: 1em 0; text-align: center; }
-        figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
-        figcaption { font-size: 0.9em; color: #555; margin-top: 0.5em; }
-        /* Shortcodes */
-        .shortcode-quote { border-left: 4px solid #ccc; padding-left: 1em; margin: 1em 0; font-style: italic; }
-        .shortcode-quote cite { display: block; text-align: right; font-style: normal; color: #777; }
-    `;
+    let cssContent = `\n        body { font-family: ${config.designTokens.fontFamily}; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }\n        h1 { font-size: ${config.designTokens.h1Size}; color: ${config.designTokens.primaryColor}; }\n        h2 { font-size: ${config.designTokens.h2Size}; }\n        h3 { font-size: ${config.designTokens.h3Size}; }\n        h4 { font-size: ${config.designTokens.h4Size}; }\n        h5 { font-size: ${config.designTokens.h5Size}; }\n        h6 { font-size: ${config.designTokens.h6Size}; }\n        a { color: ${config.designTokens.primaryColor}; text-decoration: none; }\n        a:hover { text-decoration: underline; }\n        ul { list-style: none; padding: 0; }\n        li { margin-bottom: 1rem; }\n        .nav { display: flex; justify-content: space-between; margin-top: 2rem; }\n        /* Admonition styles */\n        .admonition { padding: 1em; margin: 1em 0; border-left: 4px solid; border-radius: 4px; }\n        .admonition-title { font-weight: bold; margin-top: 0; }\n        .admonition.note { border-color: #2196F3; background-color: #e3f2fd; }\n        .admonition.note .admonition-title { color: #2196F3; }\n        .admonition.tip { border-color: #4CAF50; background-color: #e8f5e9; }\n        .admonition.tip .admonition-title { color: #4CAF50; }\n        .admonition.warning { border-color: #FFC107; background-color: #fff8e1; }\n        .admonition.warning .admonition-title { color: #FFC107; }\n        .admonition.danger { border-color: #F44336; background-color: #ffebee; }\n        .admonition.danger .admonition-title { color: #F44336; }\n        /* Footnotes */\n        .footnotes { margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; font-size: 0.9em; }\n        .footnotes ol { padding-left: 1.5em; }\n        .footnotes li { margin-bottom: 0.5em; }\n        .footnotes li a { text-decoration: none; }\n        .footnotes li a:hover { text-decoration: underline; }\n        /* Tables */\n        table { border-collapse: collapse; width: 100%; margin: 1em 0; }\n        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n        th { background-color: #f2f2f2; }\n        /* Images with captions */\n        figure { margin: 1em 0; text-align: center; }\n        figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n        figcaption { font-size: 0.9em; color: #555; margin-top: 0.5em; }\n        /* Shortcodes */\n        .shortcode-quote { border-left: 4px solid #ccc; padding-left: 1em; margin: 1em 0; font-style: italic; }\n        .shortcode-quote cite { display: block; text-align: right; font-style: normal; color: #777; }\n        /* Syntax Highlighting */\n        pre { background-color: #eee; padding: 1em; overflow-x: auto; }\n        .keyword { color: #00f; }\n        .string { color: #a31515; }\n        .comment { color: #008000; }\n        .number { color: #f90; }\n    `;
     fs.writeFileSync(path.join(distDir, 'style.css'), cssContent);
 
     // Copy assets before processing posts
     if (fs.existsSync(assetsDir)) {
         copyRecursiveSync(assetsDir, distDir);
     }
+
+    // Favicon Support
+    const faviconFiles = ['favicon.ico', 'favicon.png', 'apple-touch-icon.png'];
+    faviconFiles.forEach(favicon => {
+        const faviconPath = path.join(assetsDir, favicon);
+        if (fs.existsSync(faviconPath)) {
+            fs.copyFileSync(faviconPath, path.join(distDir, favicon));
+        }
+    });
 
     // Create .nojekyll file for GitHub Pages
     if (githubPages) {
@@ -448,7 +520,22 @@ function buildBlog() {
         const { metadata, markdownContent } = parseFrontmatter(fullContent);
 
         const title = metadata.title || markdownContent.split('\n')[0].replace(/#/g, '').trim();
-        const htmlFileName = post.replace('.md', '.html');
+        const slug = post.replace('.md', '');
+        const dateObj = new Date(metadata.date);
+        const year = dateObj.getFullYear();
+        const month = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+
+        let htmlFileName = config.permalink
+            .replace(/:year/g, year)
+            .replace(/:month/g, month)
+            .replace(/:slug/g, slug);
+
+        // Ensure .html extension if not present in permalink
+        if (!htmlFileName.endsWith('.html') && !htmlFileName.endsWith('/')) {
+            htmlFileName += '.html';
+        } else if (htmlFileName.endsWith('/')) {
+            htmlFileName += 'index.html';
+        }
 
         return {
             htmlFileName,
@@ -466,7 +553,8 @@ function buildBlog() {
 
     postData.forEach((post, index) => {
         // Only re-write HTML for changed/new files
-        if (filesToProcess.includes(post.htmlFileName.replace('.html', '.md'))) {
+        const markdownFileName = post.htmlFileName.replace('.html', '.md');
+        if (filesToProcess.includes(markdownFileName)) {
             const prevPost = index > 0 ? postData[index - 1] : null;
             const nextPost = index < postData.length - 1 ? postData[index + 1] : null;
 
@@ -483,32 +571,19 @@ function buildBlog() {
                     .replace(/{{next}}/g, nextLink);
                 finalHtml = processIncludes(finalHtml); // Process includes in post template
             } else {
-                finalHtml = `
-                    <!DOCTYPE html>
-                    <html lang="en">
-                    <head>
-                        <meta charset="UTF-8">
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <title>${post.title}</title>
-                        <link rel="stylesheet" href="./style.css">
-                    </head>
-                    <body>
-                        <h1>${post.title}</h1>
-                        ${htmlContent}
-                        <div class="nav">
-                            ${prevLink}
-                            ${nextLink}
-                        </div>
-                    </body>
-                    </html>
-                `;
+                finalHtml = `\n                    <!DOCTYPE html>\n                    <html lang="en">\n                    <head>\n                        <meta charset="UTF-8">\n                        <meta name="viewport" content="width=device-width, initial-scale=1.0">\n                        <title>${post.title}</title>\n                        <link rel="stylesheet" href="./style.css">\n                    </head>\n                    <body>\n                        <h1>${post.title}</h1>\n                        ${htmlContent}\n                        <div class="nav">\n                            ${prevLink}\n                            ${nextLink}\n                        </div>\n                    </body>\n                    </html>\n                `;
+            }
+            // Ensure directory exists for permalink structure
+            const postOutputDir = path.join(distDir, path.dirname(post.htmlFileName));
+            if (!fs.existsSync(postOutputDir)) {
+                fs.mkdirSync(postOutputDir, { recursive: true });
             }
             fs.writeFileSync(path.join(distDir, post.htmlFileName), finalHtml);
         }
 
         // Update cache for processed file (even if not re-written, its metadata might be needed for global files)
-        const stats = fs.statSync(path.join(postsDir, post.htmlFileName.replace('.html', '.md')));
-        buildCache[post.htmlFileName.replace('.html', '.md')] = stats.mtimeMs;
+        const stats = fs.statSync(path.join(postsDir, markdownFileName));
+        buildCache[markdownFileName] = stats.mtimeMs;
     });
 
     let homepageTemplate = null;
@@ -516,59 +591,51 @@ function buildBlog() {
         homepageTemplate = fs.readFileSync(homepageTemplatePath, 'utf-8');
     }
 
-    const postsListHtml = postData.map(post => `<li><a href="${post.htmlFileName}">${post.title}</a></li>`).join('');
+    // Pagination for Homepage
+    const totalPages = Math.ceil(postData.length / config.postsPerPage);
+    for (let page = 1; page <= totalPages; page++) {
+        const startIndex = (page - 1) * config.postsPerPage;
+        const endIndex = startIndex + config.postsPerPage;
+        const paginatedPosts = postData.slice(startIndex, endIndex);
 
-    let indexHtml;
-    if (homepageTemplate) {
-        indexHtml = homepageTemplate
-            .replace(/{{blogTitle}}/g, config.title)
-            .replace(/{{postsList}}/g, postsListHtml);
-        indexHtml = processIncludes(indexHtml); // Process includes in homepage template
-    } else {
-        indexHtml = `
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>${config.title}</title>
-                <link rel="stylesheet" href="./style.css">
-            </head>
-            <body>
-                <h1>Blog Posts</h1>
-                <ul>
-                    ${postsListHtml}
-                </ul>
-            </body>
-            </html>
-        `;
+        const postsListHtml = paginatedPosts.map(post => `<li><a href="${post.htmlFileName}">${post.title}</a></li>`).join('');
+
+        let paginationNav = '';
+        if (totalPages > 1) {
+            paginationNav += '<div class="pagination">';
+            if (page > 1) {
+                paginationNav += `<a href="${page === 2 ? 'index.html' : `index-${page - 1}.html`}">Previous Page</a>`;
+            }
+            paginationNav += `<span> Page ${page} of ${totalPages} </span>`;
+            if (page < totalPages) {
+                paginationNav += `<a href="index-${page + 1}.html">Next Page</a>`;
+            }
+            paginationNav += '</div>';
+        }
+
+        let indexHtml;
+        if (homepageTemplate) {
+            indexHtml = homepageTemplate
+                .replace(/{{blogTitle}}/g, config.title)
+                .replace(/{{postsList}}/g, postsListHtml)
+                .replace(/{{pagination}}/g, paginationNav);
+            indexHtml = processIncludes(indexHtml); // Process includes in homepage template
+        } else {
+            indexHtml = `\n                <!DOCTYPE html>\n                <html lang="en">\n                <head>\n                    <meta charset="UTF-8">\n                    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n                    <title>${config.title}</title>\n                    <link rel="stylesheet" href="./style.css">\n                </head>\n                <body>\n                    <h1>Blog Posts</h1>\n                    <ul>\n                        ${postsListHtml}\n                    </ul>\n                    ${paginationNav}\n                </body>\n                </html>\n            `;
+        }
+
+        const fileName = page === 1 ? 'index.html' : `index-${page}.html`;
+        fs.writeFileSync(path.join(distDir, fileName), indexHtml);
     }
-
-    fs.writeFileSync(path.join(distDir, 'index.html'), indexHtml);
 
     // RSS Feed Generation
     const rssItems = postData.map(post => {
         const description = post.content.split(' ').slice(0, 100).join(' ') + '...'; // First 100 words
         const pubDate = new Date(post.metadata.date).toUTCString();
-        return `
-            <item>
-                <title>${post.title}</title>
-                <link>./${post.htmlFileName}</link>
-                <pubDate>${pubDate}</pubDate>
-                <description>${description}</description>
-            </item>
-        `;
+        return `\n            <item>\n                <title>${post.title}</title>\n                <link>./${post.htmlFileName}</link>\n                <pubDate>${pubDate}</pubDate>\n                <description>${description}</description>\n            </item>\n        `;
     }).join('');
 
-    const rssFeed = `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
-<channel>
-    <title>${config.title}</title>
-    <link>./index.html</link>
-    <description>A blog built with Gemini CLI</description>
-    ${rssItems}
-</channel>
-</rss>`;
+    const rssFeed = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n    <title>${config.title}</title>\n    <link>./index.html</link>\n    <description>A blog built with Gemini CLI</description>\n    ${rssItems}\n</channel>\n</rss>`;
 
     fs.writeFileSync(path.join(distDir, 'rss.xml'), rssFeed);
 
@@ -593,25 +660,31 @@ function buildBlog() {
 
         for (const tag in allTags) {
             const tagPosts = allTags[tag];
-            const tagHtml = `
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                    <meta charset="UTF-8">
-                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <title>Posts tagged: ${tag}</title>
-                    <link rel="stylesheet" href="../style.css">
-                </head>
-                <body>
-                    <h1>Posts Tagged: ${tag}</h1>
-                    <ul>
-                        ${tagPosts.map(post => `<li><a href="../${post.htmlFileName}">${post.title}</a></li>`).join('')}
-                    </ul>
-                    <p><a href="../index.html">Back to Home</a></p>
-                </body>
-                </html>
-            `;
-            fs.writeFileSync(path.join(tagsDir, `${tag}.html`), tagHtml);
+            const tagTotalPages = Math.ceil(tagPosts.length / config.postsPerPage);
+            for (let page = 1; page <= tagTotalPages; page++) {
+                const startIndex = (page - 1) * config.postsPerPage;
+                const endIndex = startIndex + config.postsPerPage;
+                const paginatedTagPosts = tagPosts.slice(startIndex, endIndex);
+
+                const tagPostsListHtml = paginatedTagPosts.map(post => `<li><a href="../${post.htmlFileName}">${post.title}</a></li>`).join('');
+
+                let tagPaginationNav = '';
+                if (tagTotalPages > 1) {
+                    tagPaginationNav += '<div class="pagination">';
+                    if (page > 1) {
+                        tagPaginationNav += `<a href="${page === 2 ? `${tag}.html` : `${tag}-${page - 1}.html`}">Previous Page</a>`;
+                    }
+                    tagPaginationNav += `<span> Page ${page} of ${tagTotalPages} </span>`;
+                    if (page < tagTotalPages) {
+                        tagPaginationNav += `<a href="${tag}-${page + 1}.html">Next Page</a>`;
+                    }
+                    tagPaginationNav += '</div>';
+                }
+
+                const tagFileName = page === 1 ? `${tag}.html` : `${tag}-${page}.html`;
+                const tagHtml = `\n                    <!DOCTYPE html>\n                    <html lang="en">\n                    <head>\n                        <meta charset="UTF-8">\n                        <meta name="viewport" content="width=device-width, initial-scale=1.0">\n                        <title>Posts tagged: ${tag}</title>\n                        <link rel="stylesheet" href="../style.css">\n                    </head>\n                    <body>\n                        <h1>Posts Tagged: ${tag}</h1>\n                        <ul>\n                            ${tagPostsListHtml}\n                        </ul>\n                        ${tagPaginationNav}\n                        <p><a href="../index.html">Back to Home</a></p>\n                    </body>\n                    </html>\n                `;
+                fs.writeFileSync(path.join(tagsDir, tagFileName), tagHtml);
+            }
         }
     }
 
@@ -654,12 +727,16 @@ async function initWizard() {
     const outputDir = await askQuestion(`Output Directory (${defaultConfig.outputDir}): `) || defaultConfig.outputDir;
     const templateFile = await askQuestion(`Post Template File (${defaultConfig.template}): `) || defaultConfig.template;
     const homepageTemplateFile = await askQuestion(`Homepage Template File (${defaultConfig.homepageTemplate}): `) || defaultConfig.homepageTemplate;
+    const postsPerPage = parseInt(await askQuestion(`Posts Per Page (${defaultConfig.postsPerPage}): `) || defaultConfig.postsPerPage, 10);
+    const permalink = await askQuestion(`Permalink Structure (${defaultConfig.permalink}): `) || defaultConfig.permalink;
 
     const newConfig = {
         title: blogTitle,
         outputDir: outputDir,
         template: templateFile,
-        homepageTemplate: homepageTemplateFile
+        homepageTemplate: homepageTemplateFile,
+        postsPerPage: postsPerPage,
+        permalink: permalink
     };
 
     fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2));
@@ -677,7 +754,7 @@ async function initWizard() {
     }
 
     if (!fs.existsSync(homepageTemplateFile)) {
-        const defaultHomepageTemplateContent = `<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>{{blogTitle}}</title>\n    <link rel="stylesheet" href="./style.css">\n</head>\n<body>\n    <h1>{{blogTitle}}</h1>\n    <ul>\n        {{postsList}}\n    </ul>\n</body>\n</html>\n`;
+        const defaultHomepageTemplateContent = `<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>{{blogTitle}}</title>\n    <link rel="stylesheet" href="./style.css">\n</head>\n<body>\n    <h1>{{blogTitle}}</h1>\n    <ul>\n        {{postsList}}\n    </ul>\n    {{pagination}}\n</body>\n</html>\n`;
         fs.writeFileSync(homepageTemplateFile, defaultHomepageTemplateContent);
         console.log(`Created default homepage template file at ${homepageTemplateFile}`);
     }
@@ -703,6 +780,7 @@ async function newPostWizard() {
     const tagsInput = await askQuestion("Tags (comma-separated, optional): ");
     const tags = tagsInput ? tagsInput.split(',').map(tag => tag.trim()) : [];
     const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const isDraft = (await askQuestion("Mark as draft? (yes/no): ")).toLowerCase() === 'yes';
 
     const fileName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-*|-*$/g, '') + '.md';
     const filePath = path.join(postsDir, fileName);
@@ -714,6 +792,7 @@ async function newPostWizard() {
     ];
     if (author) frontmatter.push(`author: ${author}`);
     if (tags.length > 0) frontmatter.push(`tags: [${tags.join(', ')}]`);
+    if (isDraft) frontmatter.push(`draft: true`);
     frontmatter.push("---");
 
     const content = frontmatter.join('\n') + '\n\nWrite your post content here.';
@@ -754,20 +833,7 @@ if (initMode) {
                 let servedContent = content.toString();
                 // Inject live reload script only for HTML files
                 if (filePath.endsWith('.html')) {
-                    servedContent = servedContent.replace('</body>', `
-                        <script>
-                            let lastBuildTime = ${lastBuildTime};
-                            setInterval(() => {
-                                fetch('/__last_build_time__')
-                                    .then(response => response.json())
-                                    .then(data => {
-                                        if (data.lastBuildTime > lastBuildTime) {
-                                            window.location.reload();
-                                        }
-                                    });
-                            }, 1000);
-                        </script>
-                    </body>`);
+                    servedContent = servedContent.replace('</body>', `\n                        <script>\n                            let lastBuildTime = ${lastBuildTime};\n                            setInterval(() => {\n                                fetch('/__last_build_time__')\n                                    .then(response => response.json())\n                                    .then(data => {\n                                        if (data.lastBuildTime > lastBuildTime) {\n                                            window.location.reload();\n                                        }\n                                    });\n                            }, 1000);\n                        </script>\n                    </body>`);
                 }
                 res.writeHead(200, { 'Content-Type': 'text/html' });
                 res.end(servedContent, 'utf-8');

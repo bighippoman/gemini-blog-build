@@ -10,7 +10,17 @@ const defaultConfig = {
     outputDir: "dist",
     template: "template.html",
     homepageTemplate: "homepage-template.html",
-    includeTags: true // Default to true for tag pages
+    includeTags: true, // Default to true for tag pages
+    designTokens: { // Default design tokens
+        primaryColor: "#007bff",
+        fontFamily: "sans-serif",
+        h1Size: "2em",
+        h2Size: "1.5em",
+        h3Size: "1.17em",
+        h4Size: "1em",
+        h5Size: "0.83em",
+        h6Size: "0.67em"
+    }
 };
 
 let config = defaultConfig;
@@ -25,6 +35,7 @@ let githubPages = false;
 let initMode = false;
 let cleanBuild = false;
 let serveMode = false;
+let newPostMode = false;
 
 for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -40,6 +51,8 @@ for (let i = 0; i < args.length; i++) {
         cleanBuild = true;
     } else if (arg === '--serve') {
         serveMode = true;
+    } else if (arg === 'new') {
+        newPostMode = true;
     } else if (!arg.startsWith('--')) {
         postsDir = arg; // Assume the first non-flag argument is the posts directory
     }
@@ -49,6 +62,8 @@ const distDir = config.outputDir;
 const templatePath = config.template;
 const homepageTemplatePath = config.homepageTemplate;
 const assetsDir = 'assets';
+
+let lastBuildTime = Date.now(); // Track last build time for live reload
 
 // Function to copy files/directories recursively
 function copyRecursiveSync(src, dest) {
@@ -80,6 +95,17 @@ function processIncludes(htmlContent) {
     });
 }
 
+// Function to process shortcodes
+function processShortcodes(content) {
+    // Example: {{ youtube videoId="abc" }}
+    content = content.replace(/{{ youtube videoId="(.*?)" }}/g, '<iframe width="560" height="315" src="https://www.youtube.com/embed/$1" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>');
+
+    // Example: {{ quote author="Jane Doe" }}Content here{{ /quote }}
+    content = content.replace(/{{ quote author="(.*?)" }}(.*?){{ \/quote }}/gs, '<blockquote class="shortcode-quote"><p>$2</p><cite>— $1</cite></blockquote>');
+
+    return content;
+}
+
 // Enhanced Markdown to HTML conversion
 function mdToHtml(md) {
     let html = [];
@@ -93,6 +119,19 @@ function mdToHtml(md) {
     let inBlockquote = false;
     let inUnorderedList = false;
     let inOrderedList = false;
+    let inDefinitionList = false;
+    let inAdmonition = false;
+    let footnotes = {};
+
+    // First pass for footnotes definitions
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const footnoteMatch = line.match(/^\s*\[\^(\d+)\]:\s*(.*)/);
+        if (footnoteMatch) {
+            footnotes[footnoteMatch[1]] = footnoteMatch[2].trim();
+            lines[i] = ''; // Remove footnote definition from content
+        }
+    }
 
     for (let i = 0; i < lines.length; i++) {
         let line = lines[i];
@@ -114,6 +153,27 @@ function mdToHtml(md) {
 
         if (inCodeBlock) {
             codeContent.push(line);
+            continue;
+        }
+
+        // Admonition detection
+        const admonitionMatch = trimmedLine.match(/^>\s*\[!(NOTE|TIP|WARNING|DANGER)\]\s*(.*)/);
+        if (admonitionMatch) {
+            if (inAdmonition) {
+                html.push('</div>'); // Close previous admonition
+            }
+            inAdmonition = true;
+            const type = admonitionMatch[1].toLowerCase();
+            const title = admonitionMatch[2].trim();
+            html.push(`<div class="admonition ${type}"><p class="admonition-title">${title}</p>`);
+            continue;
+        } else if (inAdmonition && !trimmedLine.startsWith('>')) {
+            html.push('</div>'); // Close admonition if line doesn't start with >
+            inAdmonition = false;
+        }
+
+        if (inAdmonition) {
+            html.push(`<p>${trimmedLine.substring(1).trim()}</p>`);
             continue;
         }
 
@@ -164,7 +224,7 @@ function mdToHtml(md) {
             inBlockquote = false;
         }
 
-        // List detection
+        // List detection (unordered)
         if (trimmedLine.startsWith('-') || trimmedLine.startsWith('*')) {
             if (!inUnorderedList) {
                 html.push('<ul>');
@@ -177,6 +237,7 @@ function mdToHtml(md) {
             inUnorderedList = false;
         }
 
+        // List detection (ordered)
         if (trimmedLine.match(/^\d+\./)) {
             if (!inOrderedList) {
                 html.push('<ol>');
@@ -187,6 +248,20 @@ function mdToHtml(md) {
         } else if (inOrderedList) {
             html.push('</ol>');
             inOrderedList = false;
+        }
+
+        // Definition List detection
+        const defListMatch = trimmedLine.match(/^(.*?)\s*:\s*(.*)$/);
+        if (defListMatch) {
+            if (!inDefinitionList) {
+                html.push('<dl>');
+                inDefinitionList = true;
+            }
+            html.push(`<dt>${defListMatch[1].trim()}</dt><dd>${defListMatch[2].trim()}</dd>`);
+            continue;
+        } else if (inDefinitionList) {
+            html.push('</dl>');
+            inDefinitionList = false;
         }
 
         // Headers
@@ -205,8 +280,24 @@ function mdToHtml(md) {
         } else if (line.trim() === '') {
             html.push('<br>');
         } else {
-            // Images
-            line = line.replace(/!\[(.*?)\]\((.*?)\)/g, '<img alt="$1" src="$2">');
+            // Footnote references
+            line = line.replace(/\[\^(\d+)\]/g, (match, fnId) => {
+                if (footnotes[fnId]) {
+                    return `<sup><a href="#fn${fnId}" id="fnref${fnId}">${fnId}</a></sup>`;
+                } else {
+                    return match; // Keep original if footnote not defined
+                }
+            });
+
+            // Images with optional captions
+            line = line.replace(/!\[(.*?)\]\((.*?)(?:\s+"(.*?)")?\)/g, (match, alt, src, caption) => {
+                let imgTag = `<img alt="${alt}" src="${src}">`;
+                if (caption) {
+                    return `<figure>${imgTag}<figcaption>${caption}</figcaption></figure>`;
+                } else {
+                    return imgTag;
+                }
+            });
 
             // Bold and Italic
             line = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'); // Bold
@@ -240,6 +331,22 @@ function mdToHtml(md) {
     }
     if (inOrderedList) {
         html.push('</ol>');
+    }
+    if (inDefinitionList) {
+        html.push('</dl>');
+    }
+    if (inAdmonition) {
+        html.push('</div>');
+    }
+
+    // Add footnote definitions at the end
+    const footnoteKeys = Object.keys(footnotes).sort((a, b) => parseInt(a) - parseInt(b));
+    if (footnoteKeys.length > 0) {
+        html.push('<div class="footnotes"><ol>');
+        footnoteKeys.forEach(key => {
+            html.push(`<li id="fn${key}">${footnotes[key]} <a href="#fnref${key}" title="Return to content">&#8617;</a></li>`);
+        });
+        html.push('</ol></div>');
     }
 
     return html.join('\n');
@@ -278,43 +385,50 @@ function buildBlog() {
         fs.mkdirSync(distDir);
     }
 
-    // Load build cache
-    let buildCache = {};
-    const cacheFilePath = path.join(distDir, buildCachePath);
-    if (fs.existsSync(cacheFilePath)) {
-        buildCache = JSON.parse(fs.readFileSync(cacheFilePath, 'utf-8'));
-    }
-
-    let filesToProcess = [];
-    const currentMarkdownFiles = fs.readdirSync(postsDir).filter(file => file.endsWith('.md'));
-
-    currentMarkdownFiles.forEach(file => {
-        const filePath = path.join(postsDir, file);
-        const stats = fs.statSync(filePath);
-        const mtimeMs = stats.mtimeMs;
-
-        if (!buildCache[file] || buildCache[file] < mtimeMs) {
-            filesToProcess.push(file);
-        }
-    });
-
-    // Remove deleted files from cache and dist
-    for (const cachedFile in buildCache) {
-        if (!currentMarkdownFiles.includes(cachedFile)) {
-            const htmlFileName = cachedFile.replace('.md', '.html');
-            const htmlFilePath = path.join(distDir, htmlFileName);
-            if (fs.existsSync(htmlFilePath)) {
-                fs.unlinkSync(htmlFilePath);
-                console.log(`Deleted ${htmlFileName}`);
-            }
-            delete buildCache[cachedFile];
-        }
-    }
-
-    if (filesToProcess.length === 0 && Object.keys(buildCache).length === currentMarkdownFiles.length) {
-        console.log("No changes detected. Skipping build.");
-        return; // Skip build if no changes
-    }
+    // Generate CSS file based on design tokens
+    let cssContent = `
+        body { font-family: ${config.designTokens.fontFamily}; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        h1 { font-size: ${config.designTokens.h1Size}; color: ${config.designTokens.primaryColor}; }
+        h2 { font-size: ${config.designTokens.h2Size}; }
+        h3 { font-size: ${config.designTokens.h3Size}; }
+        h4 { font-size: ${config.designTokens.h4Size}; }
+        h5 { font-size: ${config.designTokens.h5Size}; }
+        h6 { font-size: ${config.designTokens.h6Size}; }
+        a { color: ${config.designTokens.primaryColor}; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        ul { list-style: none; padding: 0; }
+        li { margin-bottom: 1rem; }
+        .nav { display: flex; justify-content: space-between; margin-top: 2rem; }
+        /* Admonition styles */
+        .admonition { padding: 1em; margin: 1em 0; border-left: 4px solid; border-radius: 4px; }
+        .admonition-title { font-weight: bold; margin-top: 0; }
+        .admonition.note { border-color: #2196F3; background-color: #e3f2fd; }
+        .admonition.note .admonition-title { color: #2196F3; }
+        .admonition.tip { border-color: #4CAF50; background-color: #e8f5e9; }
+        .admonition.tip .admonition-title { color: #4CAF50; }
+        .admonition.warning { border-color: #FFC107; background-color: #fff8e1; }
+        .admonition.warning .admonition-title { color: #FFC107; }
+        .admonition.danger { border-color: #F44336; background-color: #ffebee; }
+        .admonition.danger .admonition-title { color: #F44336; }
+        /* Footnotes */
+        .footnotes { margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; font-size: 0.9em; }
+        .footnotes ol { padding-left: 1.5em; }
+        .footnotes li { margin-bottom: 0.5em; }
+        .footnotes li a { text-decoration: none; }
+        .footnotes li a:hover { text-decoration: underline; }
+        /* Tables */
+        table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        /* Images with captions */
+        figure { margin: 1em 0; text-align: center; }
+        figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+        figcaption { font-size: 0.9em; color: #555; margin-top: 0.5em; }
+        /* Shortcodes */
+        .shortcode-quote { border-left: 4px solid #ccc; padding-left: 1em; margin: 1em 0; font-style: italic; }
+        .shortcode-quote cite { display: block; text-align: right; font-style: normal; color: #777; }
+    `;
+    fs.writeFileSync(path.join(distDir, 'style.css'), cssContent);
 
     // Copy assets before processing posts
     if (fs.existsSync(assetsDir)) {
@@ -356,7 +470,7 @@ function buildBlog() {
             const prevPost = index > 0 ? postData[index - 1] : null;
             const nextPost = index < postData.length - 1 ? postData[index + 1] : null;
 
-            let htmlContent = mdToHtml(post.content);
+            let htmlContent = mdToHtml(processShortcodes(post.content));
             let prevLink = prevPost ? `<a href="${prevPost.htmlFileName}">&laquo; ${prevPost.title}</a>` : '<span></span>';
             let nextLink = nextPost ? `<a href="${nextPost.htmlFileName}">${nextPost.title} &raquo;</a>` : '<span></span>';
 
@@ -376,13 +490,7 @@ function buildBlog() {
                         <meta charset="UTF-8">
                         <meta name="viewport" content="width=device-width, initial-scale=1.0">
                         <title>${post.title}</title>
-                        <style>
-                            body { font-family: sans-serif; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-                            h1, h2, h3 { color: #333; }
-                            a { color: #007bff; text-decoration: none; }
-                            a:hover { text-decoration: underline; }
-                            .nav { display: flex; justify-content: space-between; margin-top: 2rem; }
-                        </style>
+                        <link rel="stylesheet" href="./style.css">
                     </head>
                     <body>
                         <h1>${post.title}</h1>
@@ -424,14 +532,7 @@ function buildBlog() {
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>${config.title}</title>
-                <style>
-                    body { font-family: sans-serif; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-                    h1 { color: #333; }
-                    ul { list-style: none; padding: 0; }
-                    li { margin-bottom: 1rem; }
-                    a { color: #007bff; text-decoration: none; }
-                    a:hover { text-decoration: underline; }
-                </style>
+                <link rel="stylesheet" href="./style.css">
             </head>
             <body>
                 <h1>Blog Posts</h1>
@@ -499,14 +600,7 @@ function buildBlog() {
                     <meta charset="UTF-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1.0">
                     <title>Posts tagged: ${tag}</title>
-                    <style>
-                        body { font-family: sans-serif; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-                        h1 { color: #333; }
-                        ul { list-style: none; padding: 0; }
-                        li { margin-bottom: 1rem; }
-                        a { color: #007bff; text-decoration: none; }
-                        a:hover { text-decoration: underline; }
-                    </style>
+                    <link rel="stylesheet" href="../style.css">
                 </head>
                 <body>
                     <h1>Posts Tagged: ${tag}</h1>
@@ -533,6 +627,8 @@ function buildBlog() {
 
     // Save build cache
     fs.writeFileSync(cacheFilePath, JSON.stringify(buildCache, null, 2));
+
+    lastBuildTime = Date.now(); // Update build time after successful build
 
     let successMessage = 'Blog built successfully!';
     if (githubPages) {
@@ -575,13 +671,13 @@ async function initWizard() {
     }
 
     if (!fs.existsSync(templateFile)) {
-        const defaultTemplateContent = `<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>{{title}}</title>\n    <style>\n        body { font-family: sans-serif; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }\n        h1, h2, h3 { color: #333; }\n        a { color: #007bff; text-decoration: none; }\n        a:hover { text-decoration: underline; }\n        .nav { display: flex; justify-content: space-between; margin-top: 2rem; }\n    </style>\n</head>\n<body>\n    <h1>{{title}}</h1>\n    {{content}}\n    <div class="nav">\n        {{prev}}\n        {{next}}\n    </div>\n</body>\n</html>\n`;
+        const defaultTemplateContent = `<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>{{title}}</title>\n    <link rel="stylesheet" href="./style.css">\n</head>\n<body>\n    <h1>{{title}}</h1>\n    {{content}}\n    <div class="nav">\n        {{prev}}\n        {{next}}\n    </div>\n</body>\n</html>\n`;
         fs.writeFileSync(templateFile, defaultTemplateContent);
         console.log(`Created default post template file at ${templateFile}`);
     }
 
     if (!fs.existsSync(homepageTemplateFile)) {
-        const defaultHomepageTemplateContent = `<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>{{blogTitle}}</title>\n    <style>\n        body { font-family: sans-serif; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }\n        h1 { color: #333; }\n        ul { list-style: none; padding: 0; }\n        li { margin-bottom: 1rem; }\n        a { color: #007bff; text-decoration: none; }\n        a:hover { text-decoration: underline; }\n    </style>\n</head>\n<body>\n    <h1>{{blogTitle}}</h1>\n    <ul>\n        {{postsList}}\n    </ul>\n</body>\n</html>\n`;
+        const defaultHomepageTemplateContent = `<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>{{blogTitle}}</title>\n    <link rel="stylesheet" href="./style.css">\n</head>\n<body>\n    <h1>{{blogTitle}}</h1>\n    <ul>\n        {{postsList}}\n    </ul>\n</body>\n</html>\n`;
         fs.writeFileSync(homepageTemplateFile, defaultHomepageTemplateContent);
         console.log(`Created default homepage template file at ${homepageTemplateFile}`);
     }
@@ -590,10 +686,56 @@ async function initWizard() {
     console.log("\nSetup complete! You can now add Markdown files to your posts directory and run the tool.");
 }
 
+async function newPostWizard() {
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    function askQuestion(query) {
+        return new Promise(resolve => rl.question(query, resolve));
+    }
+
+    console.log("\nCreating a new blog post!");
+
+    const title = await askQuestion("Post Title: ");
+    const author = await askQuestion("Author (optional): ");
+    const tagsInput = await askQuestion("Tags (comma-separated, optional): ");
+    const tags = tagsInput ? tagsInput.split(',').map(tag => tag.trim()) : [];
+    const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+    const fileName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-*|-*$/g, '') + '.md';
+    const filePath = path.join(postsDir, fileName);
+
+    const frontmatter = [
+        "---",
+        `title: "${title}" `,
+        `date: ${date}`
+    ];
+    if (author) frontmatter.push(`author: ${author}`);
+    if (tags.length > 0) frontmatter.push(`tags: [${tags.join(', ')}]`);
+    frontmatter.push("---");
+
+    const content = frontmatter.join('\n') + '\n\nWrite your post content here.';
+
+    fs.writeFileSync(filePath, content);
+    console.log(`\nNew post created at: ${filePath}`);
+
+    rl.close();
+}
+
 if (initMode) {
     initWizard();
+} else if (newPostMode) {
+    newPostWizard();
 } else if (serveMode) {
     const server = http.createServer((req, res) => {
+        if (req.url === '/__last_build_time__') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ lastBuildTime }));
+            return;
+        }
+
         let filePath = path.join(distDir, req.url);
         if (filePath.endsWith('/')) {
             filePath += 'index.html';
@@ -609,8 +751,26 @@ if (initMode) {
                     res.end(`Server Error: ${err.code}`);
                 }
             } else {
+                let servedContent = content.toString();
+                // Inject live reload script only for HTML files
+                if (filePath.endsWith('.html')) {
+                    servedContent = servedContent.replace('</body>', `
+                        <script>
+                            let lastBuildTime = ${lastBuildTime};
+                            setInterval(() => {
+                                fetch('/__last_build_time__')
+                                    .then(response => response.json())
+                                    .then(data => {
+                                        if (data.lastBuildTime > lastBuildTime) {
+                                            window.location.reload();
+                                        }
+                                    });
+                            }, 1000);
+                        </script>
+                    </body>`);
+                }
                 res.writeHead(200, { 'Content-Type': 'text/html' });
-                res.end(content, 'utf-8');
+                res.end(servedContent, 'utf-8');
             }
         });
     });

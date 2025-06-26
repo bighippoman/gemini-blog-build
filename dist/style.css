@@ -1,0 +1,42 @@
+
+        body { font-family: sans-serif; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        h1 { font-size: 2em; color: #007bff; }
+        h2 { font-size: 1.5em; }
+        h3 { font-size: 1.17em; }
+        h4 { font-size: 1em; }
+        h5 { font-size: 0.83em; }
+        h6 { font-size: 0.67em; }
+        a { color: #007bff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        ul { list-style: none; padding: 0; }
+        li { margin-bottom: 1rem; }
+        .nav { display: flex; justify-content: space-between; margin-top: 2rem; }
+        /* Admonition styles */
+        .admonition { padding: 1em; margin: 1em 0; border-left: 4px solid; border-radius: 4px; }
+        .admonition-title { font-weight: bold; margin-top: 0; }
+        .admonition.note { border-color: #2196F3; background-color: #e3f2fd; }
+        .admonition.note .admonition-title { color: #2196F3; }
+        .admonition.tip { border-color: #4CAF50; background-color: #e8f5e9; }
+        .admonition.tip .admonition-title { color: #4CAF50; }
+        .admonition.warning { border-color: #FFC107; background-color: #fff8e1; }
+        .admonition.warning .admonition-title { color: #FFC107; }
+        .admonition.danger { border-color: #F44336; background-color: #ffebee; }
+        .admonition.danger .admonition-title { color: #F44336; }
+        /* Footnotes */
+        .footnotes { margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; font-size: 0.9em; }
+        .footnotes ol { padding-left: 1.5em; }
+        .footnotes li { margin-bottom: 0.5em; }
+        .footnotes li a { text-decoration: none; }
+        .footnotes li a:hover { text-decoration: underline; }
+        /* Tables */
+        table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        /* Images with captions */
+        figure { margin: 1em 0; text-align: center; }
+        figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+        figcaption { font-size: 0.9em; color: #555; margin-top: 0.5em; }
+        /* Shortcodes */
+        .shortcode-quote { border-left: 4px solid #ccc; padding-left: 1em; margin: 1em 0; font-style: italic; }
+        .shortcode-quote cite { display: block; text-align: right; font-style: normal; color: #777; }
+    

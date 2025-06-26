@@ -1,4 +1,4 @@
-# gemini-blog-build v3.0
+# gemini-blog-build v4.0
 
 A powerful, zero-dependency CLI tool that transforms Markdown files into a complete, static HTML blog. Built entirely with Google's Gemini CLI, `gemini-blog-build` offers simplicity without sacrificing extensibility.
 
@@ -39,6 +39,15 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
     -   Images (`![alt text](url)`)
     -   Blockquotes (`> `)
     -   Lists (ordered `1.`, `2.`, and unordered `-`, `*`)
+    -   Footnotes (`[^1]`, `[^1]: Definition`)
+    -   Definition Lists (`Term : Definition`)
+    -   Admonitions/Callouts (`> [!NOTE] Title`)
+-   **Shortcodes / Custom Components**: Embed reusable content like YouTube videos or custom quotes.
+    ```markdown
+    {{ youtube videoId="dQw4w9WgXcQ" }}
+    {{ quote author="Albert Einstein" }}Imagination is more important than knowledge.{{ /quote }}
+    ```
+-   **Theming & Basic Design System**: Configure primary color, font family, and heading sizes in `blog.config.json` to generate a `style.css`.
 -   **Static Asset Copying**: Automatically copies all files and subdirectories from an `assets/` folder to your output directory.
 -   **Build Watch Mode**: Run `blog-build --watch` to automatically rebuild your blog whenever changes are detected in the `posts/` directory.
 -   **GitHub Pages Deployment Suggestion**: Use the `--github-pages` flag to generate a `.nojekyll` file and get a suggestion for deploying to GitHub Pages using `git subtree push`.
@@ -49,10 +58,13 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
     -   `--clean`: Clean the output directory before building.
     -   `--serve`: Start a local development server to preview the blog.
 -   **Interactive CLI Setup Wizard**: Run `blog-build init` for a guided setup of your blog, including title, output directory, and template choice.
+-   **Post Creation Wizard (`blog-build new`)**: Interactively create new Markdown files with pre-filled frontmatter.
 -   **Tag/Category Pages**: Automatically generates dedicated HTML pages for each unique tag found in post frontmatter.
 -   **Search Index Generation**: Creates a `search-index.json` file in the output directory for client-side search implementations.
 -   **Incremental Builds**: Only re-processes changed Markdown files, significantly speeding up subsequent builds.
 -   **Draft Posts**: Exclude posts from the final build by adding `draft: true` to their frontmatter.
+-   **Related Posts**: Displays a list of related posts based on shared tags at the bottom of each post.
+-   **Dynamic Tag Cloud/List**: Generates a list of all tags used in the blog, with links to their respective tag pages.
 
 ## Installation
 
@@ -78,6 +90,14 @@ blog-build init
 ```
 
 This will guide you through setting up your `blog.config.json`, `posts/` directory, and `template.html`.
+
+### Create a New Post
+
+Interactively create a new Markdown file with pre-filled frontmatter:
+
+```bash
+blog-build new
+```
 
 ### Build Your Blog
 

@@ -1,4 +1,4 @@
-# gemini-blog-build v2.0
+# gemini-blog-build v3.0
 
 A powerful, zero-dependency CLI tool that transforms Markdown files into a complete, static HTML blog. Built entirely with Google's Gemini CLI, `gemini-blog-build` offers simplicity without sacrificing extensibility.
 
@@ -19,6 +19,8 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
     ```
 -   **RSS Feed Generation**: Automatically creates `dist/rss.xml` for easy content syndication.
 -   **Custom Template Support**: Use a `template.html` file in your project root to customize the layout of your individual blog posts. Supports `{{title}}`, `{{content}}`, `{{prev}}`, and `{{next}}` placeholders.
+-   **Homepage Template**: Customize the `index.html` layout using `homepage-template.html` with `{{blogTitle}}` and `{{postsList}}` placeholders.
+-   **Partial Templates**: Include reusable HTML snippets within templates using `{{include filename.html}}`.
 -   **Config File Support (`blog.config.json`)**: Customize global settings like blog title, output directory, and template file.
     ```json
     {
@@ -27,12 +29,16 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
       "template": "my-template.html"
     }
     ```
--   **Basic Markdown Enhancements**: Supports:
+-   **Advanced Markdown Enhancements**: Supports:
     -   Headers (`#` to `######`)
     -   Bold (`**text**`)
     -   Italic (`*text*`)
     -   Auto-linking URLs
     -   Code blocks (fenced with ```` ``` ````, with optional language highlighting).
+    -   Tables
+    -   Images (`![alt text](url)`)
+    -   Blockquotes (`> `)
+    -   Lists (ordered `1.`, `2.`, and unordered `-`, `*`)
 -   **Static Asset Copying**: Automatically copies all files and subdirectories from an `assets/` folder to your output directory.
 -   **Build Watch Mode**: Run `blog-build --watch` to automatically rebuild your blog whenever changes are detected in the `posts/` directory.
 -   **GitHub Pages Deployment Suggestion**: Use the `--github-pages` flag to generate a `.nojekyll` file and get a suggestion for deploying to GitHub Pages using `git subtree push`.
@@ -40,7 +46,13 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
     -   `--output <dir>`: Specify the output directory (overrides `blog.config.json`).
     -   `--watch`: Enable watch mode.
     -   `--github-pages`: Prepare for GitHub Pages deployment.
+    -   `--clean`: Clean the output directory before building.
+    -   `--serve`: Start a local development server to preview the blog.
 -   **Interactive CLI Setup Wizard**: Run `blog-build init` for a guided setup of your blog, including title, output directory, and template choice.
+-   **Tag/Category Pages**: Automatically generates dedicated HTML pages for each unique tag found in post frontmatter.
+-   **Search Index Generation**: Creates a `search-index.json` file in the output directory for client-side search implementations.
+-   **Incremental Builds**: Only re-processes changed Markdown files, significantly speeding up subsequent builds.
+-   **Draft Posts**: Exclude posts from the final build by adding `draft: true` to their frontmatter.
 
 ## Installation
 
@@ -89,6 +101,22 @@ To automatically rebuild your blog when Markdown files change:
 blog-build --watch
 ```
 
+### Start a Local Development Server
+
+To preview your blog locally:
+
+```bash
+blog-build --serve
+```
+
+### Clean Build
+
+To clean the output directory before building:
+
+```bash
+blog-build --clean
+```
+
 ### Deploy to GitHub Pages
 
 Build your blog and prepare it for GitHub Pages:
@@ -111,7 +139,8 @@ After building, you'll see a suggestion to push your `dist` folder to the `gh-pa
 │   └── second-post.md
 ├── assets/           # Optional: Static assets (images, CSS, etc.)
 │   └── my-image.png
-└── template.html     # Optional: Custom HTML template for posts
+├── template.html     # Optional: Custom HTML template for posts
+└── homepage-template.html # Optional: Custom HTML template for the homepage
 
 # After build:
 └── dist/             # Generated static site
@@ -119,6 +148,9 @@ After building, you'll see a suggestion to push your `dist` folder to the `gh-pa
     ├── first-post.html
     ├── second-post.html
     ├── rss.xml
-    ├── .nojekyll     # (if --github-pages used)
-    └── my-image.png  # (if assets/ used)
+    ├── search-index.json
+    ├── tags/             # Tag pages
+    │   └── cli.html
+    ├── .nojekyll         # (if --github-pages used)
+    └── my-image.png      # (if assets/ used)
 ```

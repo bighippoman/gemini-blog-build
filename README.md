@@ -1,4 +1,4 @@
-# gemini-blog-build v4.1
+# gemini-blog-build v4.2
 
 A powerful, zero-dependency CLI tool that transforms Markdown files into a complete, static HTML blog. Built entirely with Google's Gemini CLI, `gemini-blog-build` offers simplicity without sacrificing extensibility.
 
@@ -6,6 +6,7 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
 
 `gemini-blog-build` now includes the following features:
 
+-   **Theming System**: Easily switch between themes by setting the `theme` property in `blog.config.json`. Themes are located in the `themes/` directory and can contain their own `template.html`, `homepage-template.html`, and `style.css`. Root-level files override theme files for granular control.
 -   **YAML Frontmatter Parsing**: Extract metadata like `title`, `date`, `tags`, and `author` from your Markdown files.
     ```markdown
     ---
@@ -18,8 +19,8 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
     This is the content of my post.
     ```
 -   **RSS Feed Generation**: Automatically creates `dist/rss.xml` for easy content syndication.
--   **Custom Template Support**: Use a `template.html` file in your project root to customize the layout of your individual blog posts. Supports `{{title}}`, `{{content}}`, `{{prev}}`, and `{{next}}` placeholders.
--   **Homepage Template**: Customize the `index.html` layout using `homepage-template.html` with `{{blogTitle}}` and `{{postsList}}` placeholders.
+-   **Custom Template Support**: Use a `template.html` file in your project root or selected theme to customize the layout of your individual blog posts. Supports `{{title}}`, `{{content}}`, `{{prev}}`, and `{{next}}` placeholders.
+-   **Homepage Template**: Customize the `index.html` layout using `homepage-template.html` with `{{blogTitle}}`, `{{postsList}}`, and `{{pagination}}` placeholders.
 -   **Partial Templates**: Include reusable HTML snippets within templates using `{{include filename.html}}`.
 -   **Config File Support (`blog.config.json`)**: Customize global settings like blog title, output directory, and template file.
     ```json
@@ -74,6 +75,13 @@ A powerful, zero-dependency CLI tool that transforms Markdown files into a compl
 -   **Pagination for Content Listings**: Paginate homepage and tag/category pages with configurable posts per page.
 -   **Customizable Permalinks**: Define custom URL structures for posts (e.g., `/:year/:month/:slug.html`).
 -   **Favicon Support**: Automatically copies favicon files and adds necessary `<link>` tags.
+-   **Draft Preview Mode**: Includes posts marked as `draft: true` only when running the local development server (`--serve`).
+-   **Post Excerpts**: Use an optional `excerpt` field in frontmatter for content listings.
+-   **Meta Tags from Frontmatter**: Generates HTML `<meta>` tags from post frontmatter for SEO.
+-   **Table of Contents Generation**: Automatically generates a TOC for posts based on headings.
+-   **Sitemap Generation**: Automatically generates a `sitemap.xml` file.
+-   **`blog-build help` Command**: Provides a clear overview of all commands and flags.
+-   **`blog-build config` Command**: Displays current configuration settings.
 
 ## Installation
 
@@ -156,6 +164,22 @@ blog-build --github-pages
 
 After building, you'll see a suggestion to push your `dist` folder to the `gh-pages` branch.
 
+### Display Help
+
+To see all available commands and options:
+
+```bash
+blog-build help
+```
+
+### View Configuration
+
+To view the current `blog.config.json` settings:
+
+```bash
+blog-build config
+```
+
 ## Project Structure
 
 ```
@@ -168,8 +192,13 @@ After building, you'll see a suggestion to push your `dist` folder to the `gh-pa
 │   └── second-post.md
 ├── assets/           # Optional: Static assets (images, CSS, etc.)
 │   └── my-image.png
-├── template.html     # Optional: Custom HTML template for posts
-└── homepage-template.html # Optional: Custom HTML template for the homepage
+├── themes/           # Optional: Custom themes
+│   └── my-theme/
+│       ├── template.html
+│       ├── homepage-template.html
+│       └── style.css
+├── template.html     # Optional: Custom HTML template for posts (overrides theme)
+└── homepage-template.html # Optional: Custom HTML template for the homepage (overrides theme)
 
 # After build:
 └── dist/             # Generated static site
@@ -178,6 +207,7 @@ After building, you'll see a suggestion to push your `dist` folder to the `gh-pa
     ├── second-post.html
     ├── rss.xml
     ├── search-index.json
+    ├── sitemap.xml
     ├── tags/             # Tag pages
     │   └── cli.html
     ├── .nojekyll         # (if --github-pages used)

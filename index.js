@@ -14,6 +14,7 @@ const defaultConfig = {
     includeTags: true, // Default to true for tag pages
     postsPerPage: 5, // Default for pagination
     permalink: "/:slug.html", // Default permalink structure
+    theme: "default", // New: Default theme
     designTokens: { // Default design tokens
         primaryColor: "#007bff",
         fontFamily: "sans-serif",
@@ -30,6 +31,14 @@ let config = defaultConfig;
 const configPath = 'blog.config.json';
 const buildCachePath = '.build-cache.json';
 
+// Load config (or create default if not exists)
+if (fs.existsSync(configPath)) {
+    const userConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    config = { ...defaultConfig, ...userConfig };
+} else {
+    fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2));
+}
+
 // Parse CLI arguments
 const args = process.argv.slice(2);
 let postsDir = 'posts';
@@ -39,6 +48,8 @@ let initMode = false;
 let cleanBuild = false;
 let serveMode = false;
 let newPostMode = false;
+let configMode = false;
+let helpMode = false;
 
 for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -56,14 +67,16 @@ for (let i = 0; i < args.length; i++) {
         serveMode = true;
     } else if (arg === 'new') {
         newPostMode = true;
+    } else if (arg === 'config') {
+        configMode = true;
+    } else if (arg === '--help' || arg === '-h') {
+        helpMode = true;
     } else if (!arg.startsWith('--')) {
         postsDir = arg; // Assume the first non-flag argument is the posts directory
     }
 }
 
 const distDir = config.outputDir;
-const templatePath = config.template;
-const homepageTemplatePath = config.homepageTemplate;
 const assetsDir = 'assets';
 
 let lastBuildTime = Date.now(); // Track last build time for live reload
@@ -489,8 +502,35 @@ function buildBlog() {
         }
     }
 
-    // Generate CSS file based on design tokens
-    let cssContent = `\n        body { font-family: ${config.designTokens.fontFamily}; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }\n        h1 { font-size: ${config.designTokens.h1Size}; color: ${config.designTokens.primaryColor}; }\n        h2 { font-size: ${config.designTokens.h2Size}; }\n        h3 { font-size: ${config.designTokens.h3Size}; }\n        h4 { font-size: ${config.designTokens.h4Size}; }\n        h5 { font-size: ${config.designTokens.h5Size}; }\n        h6 { font-size: ${config.designTokens.h6Size}; }\n        a { color: ${config.designTokens.primaryColor}; text-decoration: none; }\n        a:hover { text-decoration: underline; }\n        ul { list-style: none; padding: 0; }\n        li { margin-bottom: 1rem; }\n        .nav { display: flex; justify-content: space-between; margin-top: 2rem; }\n        /* Admonition styles */\n        .admonition { padding: 1em; margin: 1em 0; border-left: 4px solid; border-radius: 4px; }\n        .admonition-title { font-weight: bold; margin-top: 0; }\n        .admonition.note { border-color: #2196F3; background-color: #e3f2fd; }\n        .admonition.note .admonition-title { color: #2196F3; }\n        .admonition.tip { border-color: #4CAF50; background-color: #e8f5e9; }\n        .admonition.tip .admonition-title { color: #4CAF50; }\n        .admonition.warning { border-color: #FFC107; background-color: #fff8e1; }\n        .admonition.warning .admonition-title { color: #FFC107; }\n        .admonition.danger { border-color: #F44336; background-color: #ffebee; }\n        .admonition.danger .admonition-title { color: #F44336; }\n        /* Footnotes */\n        .footnotes { margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; font-size: 0.9em; }\n        .footnotes ol { padding-left: 1.5em; }\n        .footnotes li { margin-bottom: 0.5em; }\n        .footnotes li a { text-decoration: none; }\n        .footnotes li a:hover { text-decoration: underline; }\n        /* Tables */\n        table { border-collapse: collapse; width: 100%; margin: 1em 0; }\n        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n        th { background-color: #f2f2f2; }\n        /* Images with captions */\n        figure { margin: 1em 0; text-align: center; }\n        figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n        figcaption { font-size: 0.9em; color: #555; margin-top: 0.5em; }\n        /* Shortcodes */\n        .shortcode-quote { border-left: 4px solid #ccc; padding-left: 1em; margin: 1em 0; font-style: italic; }\n        .shortcode-quote cite { display: block; text-align: right; font-style: normal; color: #777; }\n        /* Syntax Highlighting */\n        pre { background-color: #eee; padding: 1em; overflow-x: auto; }\n        .keyword { color: #00f; }\n        .string { color: #a31515; }\n        .comment { color: #008000; }\n        .number { color: #f90; }\n    `;
+    // Determine theme paths
+    const themeDir = path.join(process.cwd(), 'themes', config.theme);
+    const themeTemplatePath = path.join(themeDir, 'template.html');
+    const themeHomepageTemplatePath = path.join(themeDir, 'homepage-template.html');
+    const themeStylePath = path.join(themeDir, 'style.css');
+
+    let postTemplate = null;
+    if (fs.existsSync(config.template)) { // Check root override first
+        postTemplate = fs.readFileSync(config.template, 'utf-8');
+    } else if (fs.existsSync(themeTemplatePath)) {
+        postTemplate = fs.readFileSync(themeTemplatePath, 'utf-8');
+    }
+
+    let homepageTemplate = null;
+    if (fs.existsSync(config.homepageTemplate)) { // Check root override first
+        homepageTemplate = fs.readFileSync(config.homepageTemplate, 'utf-8');
+    } else if (fs.existsSync(themeHomepageTemplatePath)) {
+        homepageTemplate = fs.readFileSync(themeHomepageTemplatePath, 'utf-8');
+    }
+
+    let cssContent = '';
+    if (fs.existsSync('style.css')) { // Check root override first
+        cssContent = fs.readFileSync('style.css', 'utf-8');
+    } else if (fs.existsSync(themeStylePath)) {
+        cssContent = fs.readFileSync(themeStylePath, 'utf-8');
+    } else {
+        // Default CSS if no theme or override is found
+        cssContent = `\n            body { font-family: ${config.designTokens.fontFamily}; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }\n            h1 { font-size: ${config.designTokens.h1Size}; color: ${config.designTokens.primaryColor}; }\n            h2 { font-size: ${config.designTokens.h2Size}; }\n            h3 { font-size: ${config.designTokens.h3Size}; }\n            h4 { font-size: ${config.designTokens.h4Size}; }\n            h5 { font-size: ${config.designTokens.h5Size}; }\n            h6 { font-size: ${config.designTokens.h6Size}; }\n            a { color: ${config.designTokens.primaryColor}; text-decoration: none; }\n            a:hover { text-decoration: underline; }\n            ul { list-style: none; padding: 0; }\n            li { margin-bottom: 1rem; }\n            .nav { display: flex; justify-content: space-between; margin-top: 2rem; }\n            /* Admonition styles */\n            .admonition { padding: 1em; margin: 1em 0; border-left: 4px solid; border-radius: 4px; }\n            .admonition-title { font-weight: bold; margin-top: 0; }\n            .admonition.note { border-color: #2196F3; background-color: #e3f2fd; }\n            .admonition.note .admonition-title { color: #2196F3; }\n            .admonition.tip { border-color: #4CAF50; background-color: #e8f5e9; }\n            .admonition.tip .admonition-title { color: #4CAF50; }\n            .admonition.warning { border-color: #FFC107; background-color: #fff8e1; }\n            .admonition.warning .admonition-title { color: #FFC107; }\n            .admonition.danger { border-color: #F44336; background-color: #ffebee; }\n            .admonition.danger .admonition-title { color: #F44336; }\n            /* Footnotes */\n            .footnotes { margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; font-size: 0.9em; }\n            .footnotes ol { padding-left: 1.5em; }\n            .footnotes li { margin-bottom: 0.5em; }\n            .footnotes li a { text-decoration: none; }\n            .footnotes li a:hover { text-decoration: underline; }\n            /* Tables */\n            table { border-collapse: collapse; width: 100%; margin: 1em 0; }\n            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n            th { background-color: #f2f2f2; }\n            /* Images with captions */\n            figure { margin: 1em 0; text-align: center; }\n            figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n            figcaption { font-size: 0.9em; color: #555; margin-top: 0.5em; }\n            /* Shortcodes */\n            .shortcode-quote { border-left: 4px solid #ccc; padding-left: 1em; margin: 1em 0; font-style: italic; }\n            .shortcode-quote cite { display: block; text-align: right; font-style: normal; color: #777; }\n            /* Syntax Highlighting */\n            pre { background-color: #eee; padding: 1em; overflow-x: auto; }\n            .keyword { color: #00f; }\n            .string { color: #a31515; }\n            .comment { color: #008000; }\n            .number { color: #f90; }\n        `;
+    }
     fs.writeFileSync(path.join(distDir, 'style.css'), cssContent);
 
     // Copy assets before processing posts
@@ -543,13 +583,8 @@ function buildBlog() {
             content: markdownContent,
             metadata
         };
-    }).filter(post => !post.metadata.draft) // Filter out draft posts
+    }).filter(post => !post.metadata.draft || serveMode) // Filter out draft posts unless in serve mode
     .sort((a, b) => new Date(b.metadata.date) - new Date(a.metadata.date)); // Sort by date, newest first
-
-    let postTemplate = null;
-    if (fs.existsSync(templatePath)) {
-        postTemplate = fs.readFileSync(templatePath, 'utf-8');
-    }
 
     postData.forEach((post, index) => {
         // Only re-write HTML for changed/new files
@@ -585,11 +620,6 @@ function buildBlog() {
         const stats = fs.statSync(path.join(postsDir, markdownFileName));
         buildCache[markdownFileName] = stats.mtimeMs;
     });
-
-    let homepageTemplate = null;
-    if (fs.existsSync(homepageTemplatePath)) {
-        homepageTemplate = fs.readFileSync(homepageTemplatePath, 'utf-8');
-    }
 
     // Pagination for Homepage
     const totalPages = Math.ceil(postData.length / config.postsPerPage);
@@ -723,12 +753,13 @@ async function initWizard() {
     console.log("\nWelcome to the Gemini Blog Build Setup Wizard!");
     console.log("Let's get your blog configured.\n");
 
-    const blogTitle = await askQuestion(`Blog Title (${defaultConfig.title}): `) || defaultConfig.title;
-    const outputDir = await askQuestion(`Output Directory (${defaultConfig.outputDir}): `) || defaultConfig.outputDir;
-    const templateFile = await askQuestion(`Post Template File (${defaultConfig.template}): `) || defaultConfig.template;
-    const homepageTemplateFile = await askQuestion(`Homepage Template File (${defaultConfig.homepageTemplate}): `) || defaultConfig.homepageTemplate;
-    const postsPerPage = parseInt(await askQuestion(`Posts Per Page (${defaultConfig.postsPerPage}): `) || defaultConfig.postsPerPage, 10);
-    const permalink = await askQuestion(`Permalink Structure (${defaultConfig.permalink}): `) || defaultConfig.permalink;
+    const blogTitle = await askQuestion(`Blog Title (${config.title}): `) || config.title;
+    const outputDir = await askQuestion(`Output Directory (${config.outputDir}): `) || config.outputDir;
+    const templateFile = await askQuestion(`Post Template File (${config.template}): `) || config.template;
+    const homepageTemplateFile = await askQuestion(`Homepage Template File (${config.homepageTemplate}): `) || config.homepageTemplate;
+    const postsPerPage = parseInt(await askQuestion(`Posts Per Page (${config.postsPerPage}): `) || config.postsPerPage, 10);
+    const permalink = await askQuestion(`Permalink Structure (${config.permalink}): `) || config.permalink;
+    const theme = await askQuestion(`Theme (${config.theme}): `) || config.theme;
 
     const newConfig = {
         title: blogTitle,
@@ -736,7 +767,8 @@ async function initWizard() {
         template: templateFile,
         homepageTemplate: homepageTemplateFile,
         postsPerPage: postsPerPage,
-        permalink: permalink
+        permalink: permalink,
+        theme: theme
     };
 
     fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2));
@@ -747,16 +779,26 @@ async function initWizard() {
         console.log(`Created posts directory at ${postsDir}`);
     }
 
-    if (!fs.existsSync(templateFile)) {
-        const defaultTemplateContent = `<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>{{title}}</title>\n    <link rel="stylesheet" href="./style.css">\n</head>\n<body>\n    <h1>{{title}}</h1>\n    {{content}}\n    <div class="nav">\n        {{prev}}\n        {{next}}\n    </div>\n</body>\n</html>\n`;
-        fs.writeFileSync(templateFile, defaultTemplateContent);
-        console.log(`Created default post template file at ${templateFile}`);
-    }
+    // Create default theme structure if it doesn't exist
+    const defaultThemeDir = path.join(process.cwd(), 'themes', 'default');
+    if (!fs.existsSync(defaultThemeDir)) {
+        fs.mkdirSync(defaultThemeDir, { recursive: true });
+        console.log(`Created default theme directory at ${defaultThemeDir}`);
 
-    if (!fs.existsSync(homepageTemplateFile)) {
-        const defaultHomepageTemplateContent = `<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>{{blogTitle}}</title>\n    <link rel="stylesheet" href="./style.css">\n</head>\n<body>\n    <h1>{{blogTitle}}</h1>\n    <ul>\n        {{postsList}}\n    </ul>\n    {{pagination}}\n</body>\n</html>\n`;
-        fs.writeFileSync(homepageTemplateFile, defaultHomepageTemplateContent);
-        console.log(`Created default homepage template file at ${homepageTemplateFile}`);
+        // Default post template for default theme
+        const defaultThemeTemplateContent = `<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>{{title}}</title>\n    <link rel="stylesheet" href="../style.css">\n</head>\n<body>\n    <h1>{{title}}</h1>\n    {{content}}\n    <div class="nav">\n        {{prev}}\n        {{next}}\n    </div>\n</body>\n</html>\n`;
+        fs.writeFileSync(path.join(defaultThemeDir, 'template.html'), defaultThemeTemplateContent);
+        console.log(`Created default theme post template at ${path.join(defaultThemeDir, 'template.html')}`);
+
+        // Default homepage template for default theme
+        const defaultThemeHomepageTemplateContent = `<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>{{blogTitle}}</title>\n    <link rel="stylesheet" href="./style.css">\n</head>\n<body>\n    <h1>{{blogTitle}}</h1>\n    <ul>\n        {{postsList}}\n    </ul>\n    {{pagination}}\n</body>\n</html>\n`;
+        fs.writeFileSync(path.join(defaultThemeDir, 'homepage-template.html'), defaultThemeHomepageTemplateContent);
+        console.log(`Created default theme homepage template at ${path.join(defaultThemeDir, 'homepage-template.html')}`);
+
+        // Default style.css for default theme
+        const defaultThemeCssContent = `\n            body { font-family: sans-serif; line-height: 1.6; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }\n            h1, h2, h3 { color: #333; }\n            a { color: #007bff; text-decoration: none; }\n            a:hover { text-decoration: underline; }\n            ul { list-style: none; padding: 0; }\n            li { margin-bottom: 1rem; }\n            .nav { display: flex; justify-content: space-between; margin-top: 2rem; }\n            .pagination { margin-top: 2rem; display: flex; justify-content: space-between; }\n            .admonition { padding: 1em; margin: 1em 0; border-left: 4px solid; border-radius: 4px; }\n            .admonition-title { font-weight: bold; margin-top: 0; }\n            .admonition.note { border-color: #2196F3; background-color: #e3f2fd; }\n            .admonition.note .admonition-title { color: #2196F3; }\n            .admonition.tip { border-color: #4CAF50; background-color: #e8f5e9; }\n            .admonition.tip .admonition-title { color: #4CAF50; }\n            .admonition.warning { border-color: #FFC107; background-color: #fff8e1; }\n            .admonition.warning .admonition-title { color: #FFC107; }\n            .admonition.danger { border-color: #F44336; background-color: #ffebee; }\n            .admonition.danger .admonition-title { color: #F44336; }\n            .footnotes { margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; font-size: 0.9em; }\n            .footnotes ol { padding-left: 1.5em; }\n            .footnotes li { margin-bottom: 0.5em; }\n            .footnotes li a { text-decoration: none; }\n            .footnotes li a:hover { text-decoration: underline; }\n            table { border-collapse: collapse; width: 100%; margin: 1em 0; }\n            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n            th { background-color: #f2f2f2; }\n            figure { margin: 1em 0; text-align: center; }\n            figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n            figcaption { font-size: 0.9em; color: #555; margin-top: 0.5em; }\n            .shortcode-quote { border-left: 4px solid #ccc; padding-left: 1em; margin: 1em 0; font-style: italic; }\n            .shortcode-quote cite { display: block; text-align: right; font-style: normal; color: #777; }\n            pre { background-color: #eee; padding: 1em; overflow-x: auto; }\n            .keyword { color: #00f; }\n            .string { color: #a31515; }\n            .comment { color: #008000; }\n            .number { color: #f90; }\n        `;
+        fs.writeFileSync(path.join(defaultThemeDir, 'style.css'), defaultThemeCssContent);
+        console.log(`Created default theme style at ${path.join(defaultThemeDir, 'style.css')}`);
     }
 
     rl.close();
@@ -777,7 +819,21 @@ async function newPostWizard() {
 
     const title = await askQuestion("Post Title: ");
     const author = await askQuestion("Author (optional): ");
-    const tagsInput = await askQuestion("Tags (comma-separated, optional): ");
+
+    // Get existing tags for suggestions
+    const existingTags = new Set();
+    const allMarkdownFiles = fs.readdirSync(postsDir).filter(file => file.endsWith('.md'));
+    allMarkdownFiles.forEach(file => {
+        const filePath = path.join(postsDir, file);
+        const fullContent = fs.readFileSync(filePath, 'utf-8');
+        const { metadata } = parseFrontmatter(fullContent);
+        if (metadata.tags && Array.isArray(metadata.tags)) {
+            metadata.tags.forEach(tag => existingTags.add(tag));
+        }
+    });
+    const tagsSuggestion = existingTags.size > 0 ? ` (e.g., ${Array.from(existingTags).join(', ')})` : '';
+
+    const tagsInput = await askQuestion(`Tags (comma-separated, optional)${tagsSuggestion}: `);
     const tags = tagsInput ? tagsInput.split(',').map(tag => tag.trim()) : [];
     const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
     const isDraft = (await askQuestion("Mark as draft? (yes/no): ")).toLowerCase() === 'yes';
@@ -800,13 +856,37 @@ async function newPostWizard() {
     fs.writeFileSync(filePath, content);
     console.log(`\nNew post created at: ${filePath}`);
 
+    const openInEditor = (await askQuestion("Open in default editor? (yes/no): ")).toLowerCase() === 'yes';
+    if (openInEditor) {
+        exec(`open ${filePath}`, (err) => {
+            if (err) {
+                console.error(`Could not open file: ${err}`);
+            }
+        });
+    }
+
     rl.close();
+}
+
+// Function to display help information
+function showHelp() {
+    console.log(`\nUsage: blog-build [command] [options]\n\nCommands:\n  init              Run the interactive setup wizard.\n  new               Create a new blog post interactively.\n  config            Display current configuration.\n\nOptions:\n  --output <dir>    Specify the output directory (overrides blog.config.json).\n  --watch           Enable watch mode (rebuilds on file changes).\n  --serve           Start a local development server with live reload.\n  --clean           Clean the output directory before building.\n  ----github-pages  Prepare output for GitHub Pages deployment.\n  --help, -h        Display this help message.\n\nExamples:\n  blog-build init\n  blog-build new\n  blog-build\n  blog-build --watch\n  blog-build --serve\n  blog-build --clean\n  blog-build --output public\n  blog-build --github-pages\n    `);
+}
+
+// Function to display current config
+function showConfig() {
+    console.log("\nCurrent Configuration:");
+    console.log(JSON.stringify(config, null, 2));
 }
 
 if (initMode) {
     initWizard();
 } else if (newPostMode) {
     newPostWizard();
+} else if (helpMode) {
+    showHelp();
+} else if (configMode) {
+    showConfig();
 } else if (serveMode) {
     const server = http.createServer((req, res) => {
         if (req.url === '/__last_build_time__') {

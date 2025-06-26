@@ -1,4 +1,3 @@
-# gemini-blog-build
 # 🪄 Gemini Blog Build
 
 **Gemini Blog Build** is a zero-dependency Node.js CLI tool that converts Markdown files into a static HTML blog — complete with navigation, styling, and a homepage. It was created entirely using [Google’s Gemini CLI](https://github.com/google-gemini/gemini-cli), from a single prompt.
